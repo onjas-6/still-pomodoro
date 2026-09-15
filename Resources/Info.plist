@@ -6,11 +6,13 @@
 <key>CFBundleIdentifier</key><string>com.onjas6.still</string>
 <key>CFBundleExecutable</key><string>Still</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>1.1.1</string>
+<key>CFBundleVersion</key><string>3</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSDesktopFolderUsageDescription</key><string>Still saves completed focus sessions to the Markdown journal you choose on your Desktop.</string>
+<key>NSDocumentsFolderUsageDescription</key><string>Still saves completed focus sessions to your local Markdown journal.</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Jason Hu. MIT License.</string>
 </dict></plist>

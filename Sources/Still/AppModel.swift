@@ -11,6 +11,20 @@ struct LocalArchive: Codable {
     var preferences = Preferences()
 }
 
+private struct JournalSyncRequest: Sendable {
+    let path: String
+    let pathIntent: Int
+    let sessionRevision: Int
+    let sessions: [FocusSession]
+    let adoptsPath: Bool
+    let createsIfMissing: Bool
+}
+
+private enum JournalSyncResult: Sendable {
+    case success([FocusSession])
+    case failure(String)
+}
+
 @MainActor
 final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     @Published private(set) var timer = TimerState()
@@ -20,6 +34,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @Published var storageError: String?
     @Published var notificationStatus = "Not requested"
     @Published var journalError: String?
+    @Published private(set) var journalIsBusy = false
     var onWindowPreferencesChanged: (() -> Void)?
     private var pulse: AnyCancellable?
     private var sound: NSSound?
@@ -27,15 +42,22 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private var hasNotificationPermission = false
     private var systemChimeScheduled = false
     private var canSave = true
+    private var journalPathIntent = 0
+    private var pendingJournalPath: String?
+    private var journalSessionRevision = 0
+    private var queuedJournalRequests: [String: JournalSyncRequest] = [:]
+    private var activeJournalPaths: Set<String> = []
+    private var journalPathWaiters: [Int: CheckedContinuation<Bool, Never>] = [:]
     let dataURL: URL
     let isPreview: Bool
 
-    init(dataDirectory: URL? = nil, preview: Bool = false) {
+    init(dataDirectory: URL? = nil, preview: Bool = false, syncJournalOnLaunch: Bool = true) {
         isPreview = preview
         dataURL = (dataDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Still", isDirectory: true)).appendingPathComponent("state.json")
         super.init()
         if !preview { load() }
+        let hadStoredJournalPath = !preferences.journalPath.isEmpty
         if preferences.journalPath.isEmpty {
             let directory = dataDirectory != nil ? dataURL.deletingLastPathComponent() : FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             preferences.journalPath = directory.appendingPathComponent("Still-sessions.md").path
@@ -50,7 +72,9 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
         if !preview {
-            if !sessions.isEmpty || FileManager.default.fileExists(atPath: preferences.journalPath) { synchronizeJournal() }
+            // The existence check and any Markdown I/O run on the journal worker. A
+            // newly generated default path with no sessions is intentionally untouched.
+            if syncJournalOnLaunch && (!sessions.isEmpty || hadStoredJournalPath) { synchronizeJournal() }
             Task { await refreshNotificationStatus() }
             if timer.phase == .running { syncNotification(requestPermission: false) }
         }
@@ -148,7 +172,10 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     }
     @objc private func woke() { advance(to: Date()) }
     private func add(_ session: FocusSession) {
-        if !sessions.contains(where: { $0.id == session.id }) { sessions.append(session) }
+        if !sessions.contains(where: { $0.id == session.id }) {
+            sessions.append(session)
+            journalSessionRevision += 1
+        }
     }
     var journalDisplayPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -157,54 +184,202 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @discardableResult
     func setJournalPath(_ path: String) -> Bool {
         guard !isPreview else { preferences.journalPath = path; return true }
+        guard let normalizedPath = normalizedJournalPath(path) else { return false }
+        let intent = beginJournalPathChange(to: normalizedPath)
+        let url = URL(fileURLWithPath: normalizedPath)
+        do {
+            let existing = FileManager.default.fileExists(atPath: url.path) ? try MarkdownJournal.read(from: url) : []
+            let merged = Self.mergedSessions(sessions, existing)
+            try MarkdownJournal.synchronize(sessions: merged, to: url)
+            if merged.count != sessions.count { journalSessionRevision += 1 }
+            sessions = merged
+            preferences.journalPath = normalizedPath
+            pendingJournalPath = nil
+            journalError = nil
+            persist()
+            refreshJournalBusy()
+            return true
+        } catch {
+            if intent == journalPathIntent {
+                pendingJournalPath = nil
+                journalError = "Could not use this Markdown file: \(error.localizedDescription)"
+                refreshJournalBusy()
+            }
+            return false
+        }
+    }
+
+    /// Nonblocking UI path selection. The returned value is available after the
+    /// background worker has validated and synchronized the requested Markdown file.
+    func setJournalPathAsync(_ path: String) async -> Bool {
+        guard !isPreview else { preferences.journalPath = path; return true }
+        guard let normalizedPath = normalizedJournalPath(path) else { return false }
+        let intent = beginJournalPathChange(to: normalizedPath)
+
+        return await withCheckedContinuation { continuation in
+            journalPathWaiters[intent] = continuation
+            enqueueJournalSync(
+                path: normalizedPath,
+                intent: intent,
+                adoptsPath: true,
+                createsIfMissing: true
+            )
+        }
+    }
+
+    private func synchronizeJournal() {
+        guard !isPreview else { return }
+        let path = pendingJournalPath ?? preferences.journalPath
+        guard !path.isEmpty else { return }
+        enqueueJournalSync(
+            path: path,
+            intent: journalPathIntent,
+            adoptsPath: pendingJournalPath == path,
+            createsIfMissing: !sessions.isEmpty || pendingJournalPath == path
+        )
+    }
+
+    private func normalizedJournalPath(_ path: String) -> String? {
         let expanded = (path.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath
         guard expanded.hasPrefix("/"), !expanded.isEmpty else {
             journalError = "Choose an absolute path ending in .md."
-            return false
+            return nil
         }
-        let url = URL(fileURLWithPath: expanded).standardizedFileURL
-        do {
-            let existing = FileManager.default.fileExists(atPath: url.path) ? try MarkdownJournal.read(from: url) : []
-            var merged = sessions
-            var ids = Set(merged.map(\.id))
-            merged.append(contentsOf: existing.filter { ids.insert($0.id).inserted })
-            merged.sort { $0.completedAt < $1.completedAt }
-            try MarkdownJournal.synchronize(sessions: merged, to: url)
-            sessions = merged
-            preferences.journalPath = url.path
-            journalError = nil
-            persist()
-            return true
-        } catch {
-            journalError = "Could not use this Markdown file: \(error.localizedDescription)"
-            return false
+        return URL(fileURLWithPath: expanded).standardizedFileURL.path
+    }
+
+    private var currentJournalTargetPath: String {
+        pendingJournalPath ?? preferences.journalPath
+    }
+
+    private func beginJournalPathChange(to path: String) -> Int {
+        journalPathIntent += 1
+        let intent = journalPathIntent
+        pendingJournalPath = path
+        for continuation in journalPathWaiters.values {
+            continuation.resume(returning: false)
+        }
+        journalPathWaiters.removeAll()
+        queuedJournalRequests = queuedJournalRequests.filter { $0.value.pathIntent == intent }
+        journalError = nil
+        refreshJournalBusy()
+        return intent
+    }
+
+    private func enqueueJournalSync(path: String, intent: Int, adoptsPath: Bool, createsIfMissing: Bool) {
+        guard intent == journalPathIntent, path == currentJournalTargetPath else { return }
+        queuedJournalRequests[path] = JournalSyncRequest(
+            path: path,
+            pathIntent: intent,
+            sessionRevision: journalSessionRevision,
+            sessions: sessions,
+            adoptsPath: adoptsPath,
+            createsIfMissing: createsIfMissing
+        )
+        startQueuedJournalSync(for: path)
+        refreshJournalBusy()
+    }
+
+    private func startQueuedJournalSync(for path: String) {
+        guard !activeJournalPaths.contains(path), let request = queuedJournalRequests.removeValue(forKey: path) else { return }
+        guard isCurrentJournalRequest(request) else {
+            refreshJournalBusy()
+            return
+        }
+
+        activeJournalPaths.insert(path)
+        refreshJournalBusy()
+        Task.detached(priority: .utility) { [weak self] in
+            let result = AppModel.performJournalSync(request)
+            guard let self else { return }
+            await self.completeJournalSync(request, result: result)
         }
     }
-    private func synchronizeJournal() {
-        guard !isPreview, !preferences.journalPath.isEmpty else { return }
-        do {
-            let url = URL(fileURLWithPath: preferences.journalPath)
-            if FileManager.default.fileExists(atPath: url.path) {
-                let existing = try MarkdownJournal.read(from: url)
-                var ids = Set(sessions.map(\.id))
-                let imported = existing.filter { ids.insert($0.id).inserted }
-                if !imported.isEmpty {
-                    sessions.append(contentsOf: imported)
-                    sessions.sort { $0.completedAt < $1.completedAt }
-                    persist()
-                }
+
+    private func completeJournalSync(_ request: JournalSyncRequest, result: JournalSyncResult) {
+        activeJournalPaths.remove(request.path)
+        defer {
+            startQueuedJournalSync(for: request.path)
+            refreshJournalBusy()
+        }
+
+        guard isCurrentJournalRequest(request) else { return }
+
+        switch result {
+        case let .success(journalSessions):
+            let cacheChanged = mergeJournalSessions(journalSessions)
+            var shouldPersist = cacheChanged
+            if request.adoptsPath {
+                preferences.journalPath = request.path
+                pendingJournalPath = nil
+                shouldPersist = true
+                journalPathWaiters.removeValue(forKey: request.pathIntent)?.resume(returning: true)
             }
-            try MarkdownJournal.synchronize(sessions: sessions, to: url)
             journalError = nil
-        } catch {
-            journalError = "Markdown could not be updated. Your session is retained locally; reopen Still or save the path again to retry. \(error.localizedDescription)"
+            if shouldPersist { persist() }
+
+            // A session may have completed while the worker held an older snapshot.
+            // Queue the newest cache without overlapping work on this path.
+            if journalSessionRevision != request.sessionRevision {
+                synchronizeJournal()
+            }
+
+        case let .failure(message):
+            if request.adoptsPath {
+                pendingJournalPath = nil
+                journalPathWaiters.removeValue(forKey: request.pathIntent)?.resume(returning: false)
+            }
+            journalError = "Markdown could not be updated. Your session is retained locally; reopen Still or save the path again to retry. \(message)"
         }
     }
-    func openJournal() {
-        if !FileManager.default.fileExists(atPath: preferences.journalPath) {
-            guard setJournalPath(preferences.journalPath) else { return }
+
+    private func isCurrentJournalRequest(_ request: JournalSyncRequest) -> Bool {
+        request.pathIntent == journalPathIntent && request.path == currentJournalTargetPath
+    }
+
+    private func mergeJournalSessions(_ journalSessions: [FocusSession]) -> Bool {
+        let merged = Self.mergedSessions(sessions, journalSessions)
+        guard merged.count != sessions.count else { return false }
+        sessions = merged
+        return true
+    }
+
+    private func refreshJournalBusy() {
+        let target = currentJournalTargetPath
+        journalIsBusy = !target.isEmpty && (activeJournalPaths.contains(target) || queuedJournalRequests[target] != nil)
+    }
+
+    private nonisolated static func performJournalSync(_ request: JournalSyncRequest) -> JournalSyncResult {
+        let url = URL(fileURLWithPath: request.path)
+        do {
+            let exists = FileManager.default.fileExists(atPath: url.path)
+            let existing = exists ? try MarkdownJournal.read(from: url) : []
+            let merged = mergedSessions(request.sessions, existing)
+            if exists || !merged.isEmpty || request.createsIfMissing {
+                try MarkdownJournal.synchronize(sessions: merged, to: url)
+            }
+            return .success(merged)
+        } catch {
+            return .failure(error.localizedDescription)
         }
-        NSWorkspace.shared.open(URL(fileURLWithPath: preferences.journalPath))
+    }
+
+    private nonisolated static func mergedSessions(_ first: [FocusSession], _ second: [FocusSession]) -> [FocusSession] {
+        var ids = Set<UUID>()
+        let merged = (first + second).filter { ids.insert($0.id).inserted }
+        return merged.sorted {
+            if $0.completedAt == $1.completedAt { return $0.id.uuidString < $1.id.uuidString }
+            return $0.completedAt < $1.completedAt
+        }
+    }
+
+    func openJournal() {
+        guard !preferences.journalPath.isEmpty else { return }
+        let path = preferences.journalPath
+        Task { @MainActor [weak self] in
+            guard let self, await self.setJournalPathAsync(path) else { return }
+            NSWorkspace.shared.open(URL(fileURLWithPath: self.preferences.journalPath))
+        }
     }
     func showJournalInFinder() {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: preferences.journalPath)])

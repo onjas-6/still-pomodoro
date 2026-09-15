@@ -7,7 +7,7 @@ struct StillApp {
     static func main() {
         if CommandLine.arguments.contains("--self-test") { exit(AppModelSelfTest.run()) }
         if let index = CommandLine.arguments.firstIndex(of: "--journal"), CommandLine.arguments.count > index + 1 {
-            let model = AppModel()
+            let model = AppModel(syncJournalOnLaunch: false)
             guard model.setJournalPath(CommandLine.arguments[index + 1]) else {
                 fputs((model.journalError ?? "Could not set journal path") + "\n", stderr)
                 exit(1)
@@ -42,14 +42,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var globalClickMonitor: Any?
     private var localEventMonitor: Any?
     private var appearanceObservation: NSKeyValueObservation?
+    private var pendingWindowPreferences: DispatchWorkItem?
+    private var windowSelfTest = false
     private var compactSize: NSSize {
         let scale = model.preferences.compactScale
-        return NSSize(width: 128 * scale, height: 52 * scale)
+        return NSSize(width: (128 * scale).rounded(), height: (52 * scale).rounded())
     }
     private let expandedSize = NSSize(width: 256, height: 196)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        preview = CommandLine.arguments.contains("--preview")
+        windowSelfTest = CommandLine.arguments.contains("--window-self-test")
+        preview = windowSelfTest || CommandLine.arguments.contains("--preview")
         model = AppModel(preview: preview)
         panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: compactSize), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Still"
@@ -63,22 +66,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.delegate = self
         panel.animationBehavior = .none
-        panel.contentView = NSHostingView(rootView: TimerView(model: model, panelState: panelState,
+        let hosting = NSHostingView(rootView: TimerView(model: model, panelState: panelState,
             toggleExpanded: { [weak self] in self?.setExpanded(true) },
             collapse: { [weak self] in self?.setExpanded(false) },
             showHistory: { [weak self] in self?.showHistory() },
             showSettings: { [weak self] in self?.showSettings() }))
+        // This borderless panel owns its frame. Do not let SwiftUI install
+        // content-size constraints while the compact/expanded hierarchy changes.
+        hosting.sizingOptions = []
+        panel.contentView = hosting
         placeWindow()
-        model.onWindowPreferencesChanged = { [weak self] in self?.applyWindowPreferences() }
+        model.onWindowPreferencesChanged = { [weak self] in self?.scheduleWindowPreferences() }
         applyWindowPreferences()
-        setupMenuBar()
-        setupDismissal()
+        if !windowSelfTest { setupMenuBar(); setupDismissal() }
         NotificationCenter.default.addObserver(self, selector: #selector(showTimer), name: .showStill, object: nil)
         // A nil appearance follows system changes for both the native material and SwiftUI.
         appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             Task { @MainActor in self?.updateAppearance() }
         }
         panel.orderFrontRegardless()
+        if windowSelfTest {
+            Task { @MainActor in
+                let result = await WindowSelfTest.run(panel: self.panel,
+                    setScale: { self.model.preferences.compactScale = $0; self.model.savePreferences() },
+                    setExpanded: { self.setExpanded($0) },
+                    flushPreferences: { self.flushWindowPreferences() })
+                exit(result)
+            }
+        }
     }
     private func placeWindow() {
         let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
@@ -102,11 +117,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                       width: frame.width, height: frame.height)
     }
     private func setPanelFrame(_ frame: NSRect) {
+        guard frame.origin.x.isFinite, frame.origin.y.isFinite,
+              frame.width.isFinite, frame.height.isFinite, frame.width > 0, frame.height > 0,
+              panel.frame != frame else { return }
         changingFrame = true
-        panel.setFrame(frame, display: true)
+        // Commit the geometry without drawing an intermediate SwiftUI layout.
+        // AppKit draws the new content on the following display pass.
+        panel.setFrame(frame, display: false, animate: false)
         changingFrame = false
     }
     private func setExpanded(_ expanded: Bool) {
+        flushWindowPreferences()
         guard panelState.expanded != expanded else { return }
         if expanded {
             compactFrame = panel.frame
@@ -144,8 +165,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return event
         }
     }
+    private func scheduleWindowPreferences() {
+        // Preference bindings fire during SwiftUI's update. Resize after that
+        // transaction, coalescing slider events instead of re-entering layout.
+        pendingWindowPreferences?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingWindowPreferences = nil
+            self?.applyWindowPreferences()
+        }
+        pendingWindowPreferences = work
+        DispatchQueue.main.async(execute: work)
+    }
+    private func flushWindowPreferences() {
+        guard pendingWindowPreferences != nil else { return }
+        pendingWindowPreferences?.cancel()
+        pendingWindowPreferences = nil
+        applyWindowPreferences()
+    }
     private func applyWindowPreferences() {
-        panel.level = model.preferences.floatOnTop ? .floating : .normal
+        let level: NSWindow.Level = model.preferences.floatOnTop ? .floating : .normal
+        if panel.level != level { panel.level = level }
         let oldSize = compactFrame.size
         compactFrame.size = compactSize
         compactFrame.origin.y += oldSize.height - compactSize.height
@@ -158,7 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let theme = model.preferences.theme
         let appearance: NSAppearance? = theme == "light" ? NSAppearance(named: .aqua) : theme == "dark" ? NSAppearance(named: .darkAqua) : nil
         for window in [panel, historyWindow, settingsWindow].compactMap({ $0 }) {
-            window.appearance = appearance
+            if window.appearance?.name != appearance?.name { window.appearance = appearance }
             if window !== panel { window.backgroundColor = .windowBackgroundColor }
         }
     }
@@ -175,6 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showTimer(); return true }
     func applicationWillTerminate(_ notification: Notification) {
+        flushWindowPreferences()
         model.persist(); saveFrame()
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
         if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }

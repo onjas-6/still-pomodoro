@@ -63,7 +63,8 @@ an invisible session identifier for reliable synchronization.
 
 A small recovery cache at `~/Library/Application Support/Still/state.json` keeps the
 active timer, preferences, and sessions so a failed Markdown write does not lose your
-work. The app shows write errors and retries on launch or when the path is saved
+work. Journal reads and writes run in the background, so a slow or unavailable notes
+folder never pauses the timer or blocks the window. The app shows write errors and retries on launch or when the path is saved
 again. Changing the journal path preserves existing contents and carries your session
 history into the selected file. Keep hidden Still metadata comments if you edit the
 journal, so the app can recognize entries and avoid duplicating them.
@@ -85,7 +86,12 @@ swift test                                    # XCTest, with full Xcode
 - `Sources/Still` — compact panel, controls, preferences, notifications, recovery cache.
 - `scripts/generate-assets.swift` — reproducible original icon and chime.
 
-Tests use temporary data. To regenerate assets, run `swift scripts/generate-assets.swift`.
+Tests use temporary data. On a logged-in Mac, also run
+`./build/Still.app/Contents/MacOS/Still --window-self-test` to check repeated resizing
+and expanding/collapsing against a real native window. This opens an isolated preview
+and does not change your timer, journal, or saved window position.
+
+To regenerate assets, run `swift scripts/generate-assets.swift`.
 
 ## License
 

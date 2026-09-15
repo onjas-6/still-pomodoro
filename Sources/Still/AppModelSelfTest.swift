@@ -28,12 +28,13 @@ enum AppModelSelfTest {
             testFocusPresetDoesNotRestart(in: root.appendingPathComponent("preset", isDirectory: true), recorder: &recorder)
             testJournalPathAppendAndRestore(in: root.appendingPathComponent("journal", isDirectory: true), recorder: &recorder)
             testLegacyPreferencesDecode(in: root.appendingPathComponent("legacy", isDirectory: true), recorder: &recorder)
+            testBackgroundJournalImportAndCompletion(in: root.appendingPathComponent("journal-worker", isDirectory: true), recorder: &recorder)
         } catch {
             recorder.fail("Unable to create self-test workspace: \(error)")
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 10 test groups")
+            print("AppModel self-test passed: 11 test groups")
             return 0
         }
 
@@ -245,13 +246,16 @@ enum AppModelSelfTest {
         let model = AppModel(dataDirectory: stateDirectory)
         prepareForTimerUse(model, focusMinutes: 1)
 
-        recorder.check(model.setJournalPath(journalURL.path), "journal: accepts a writable absolute Markdown path")
+        var pathSaved: Bool?
+        Task { pathSaved = await model.setJournalPathAsync(journalURL.path) }
+        recorder.check(waitUntil { pathSaved != nil } && pathSaved == true, "journal: async path selection accepts a writable Markdown file")
         model.startFocus(minutes: 1)
         guard let startedAt = model.timer.startedAt else {
             recorder.fail("journal: focus timer did not start")
             return
         }
         model.advance(to: startedAt.addingTimeInterval(61))
+        recorder.check(waitForJournal(model), "journal: completion finishes its background write")
 
         do {
             let written = try MarkdownJournal.read(from: journalURL)
@@ -260,6 +264,7 @@ enum AppModelSelfTest {
             recorder.check(written.first?.id == model.sessions.first?.id, "journal: Markdown row has local session identity")
 
             let restored = AppModel(dataDirectory: stateDirectory)
+            recorder.check(waitForJournal(restored), "journal: restore finishes before synchronous CLI path change")
             recorder.check(restored.sessions.count == 1, "journal: local archive restores one session")
             recorder.check(try MarkdownJournal.read(from: journalURL).count == 1, "journal: restore does not duplicate Markdown rows")
             recorder.check(restored.setJournalPath(journalURL.path), "journal: resetting the same path succeeds")
@@ -296,6 +301,44 @@ enum AppModelSelfTest {
         }
     }
 
+    private static func testBackgroundJournalImportAndCompletion(in directory: URL, recorder: inout Recorder) {
+        let stateDirectory = directory.appendingPathComponent("state", isDirectory: true)
+        let journalURL = directory.appendingPathComponent("sessions.md")
+        let imported = FocusSession(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
+            startedAt: Date(timeIntervalSince1970: 1_789_000_000),
+            completedAt: Date(timeIntervalSince1970: 1_789_001_500),
+            duration: 1_500
+        )
+        let baseline = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) - 30)
+        var timer = TimerState(mode: .focus, duration: 60)
+        timer.start(at: baseline)
+
+        var preferences = Preferences()
+        preferences.soundEnabled = false
+        preferences.notificationsEnabled = false
+        preferences.journalPath = journalURL.path
+        let archive = LocalArchive(timer: timer, sessions: [], preferences: preferences)
+
+        do {
+            try MarkdownJournal.synchronize(sessions: [imported], to: journalURL)
+            try write(archive: archive, to: archiveURL(in: stateDirectory))
+
+            let model = AppModel(dataDirectory: stateDirectory)
+            model.advance(to: baseline.addingTimeInterval(61))
+            recorder.check(waitForJournal(model), "journal worker: background import/sync reached idle state")
+
+            let ids = Set(model.sessions.map(\.id))
+            recorder.check(ids.contains(imported.id), "journal worker: existing Markdown session imports into cache")
+            recorder.check(model.sessions.count == 2, "journal worker: completion during startup sync is retained")
+            let journal = try MarkdownJournal.read(from: journalURL)
+            recorder.check(journal.count == 2, "journal worker: Markdown receives imported and newly completed sessions")
+            recorder.check(Set(journal.map(\.id)) == ids, "journal worker: journal and cache IDs agree")
+        } catch {
+            recorder.fail("journal worker: fixture failed: \(error)")
+        }
+    }
+
     private static func prepareForTimerUse(_ model: AppModel, focusMinutes: Int) {
         model.preferences.focusMinutes = focusMinutes
         model.preferences.soundEnabled = false
@@ -317,6 +360,18 @@ enum AppModelSelfTest {
 
     private static func approximately(_ actual: TimeInterval, _ expected: TimeInterval, tolerance: TimeInterval = 0.01) -> Bool {
         abs(actual - expected) <= tolerance
+    }
+
+    private static func waitForJournal(_ model: AppModel) -> Bool {
+        waitUntil { !model.journalIsBusy }
+    }
+
+    private static func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        return condition()
     }
 
     private struct Recorder {

@@ -71,6 +71,9 @@ struct PreferencesView: View {
                 if !model.journalDisplayPath.isEmpty {
                     Text(model.journalDisplayPath).font(.system(size: 10)).foregroundStyle(palette.secondary).lineLimit(1).truncationMode(.middle)
                 }
+                if model.journalIsBusy {
+                    Text("Updating Markdown…").font(.system(size: 10)).foregroundStyle(palette.secondary)
+                }
                 if let error = model.journalError {
                     Text(error).font(.system(size: 10)).foregroundStyle(.orange)
                 }
@@ -124,8 +127,9 @@ struct PreferencesView: View {
             Text(display).font(.system(size: 10)).monospacedDigit().foregroundStyle(palette.secondary).frame(width: 32, alignment: .trailing)
         }
     }
-    private func saveJournalPath() {
-        if model.setJournalPath(journalPathDraft) { journalPathDraft = model.preferences.journalPath }
+    private func saveJournalPath() { saveJournalPath(journalPathDraft) }
+    private func saveJournalPath(_ path: String) {
+        Task { _ = await model.setJournalPathAsync(path) }
     }
     private func chooseJournal() {
         let panel = NSSavePanel()
@@ -135,7 +139,7 @@ struct PreferencesView: View {
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = journalPathDraft.isEmpty ? "Still sessions.md" : URL(fileURLWithPath: journalPathDraft).lastPathComponent
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        if model.setJournalPath(url.path) { journalPathDraft = model.preferences.journalPath }
+        saveJournalPath(url.path)
     }
     private func chooseExistingJournal() {
         let panel = NSOpenPanel()
@@ -146,7 +150,7 @@ struct PreferencesView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        if model.setJournalPath(url.path) { journalPathDraft = model.preferences.journalPath }
+        saveJournalPath(url.path)
     }
 }
 
