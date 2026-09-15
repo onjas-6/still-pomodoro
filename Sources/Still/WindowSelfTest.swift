@@ -77,7 +77,7 @@ enum WindowSelfTest {
 
         setExpanded(true)
         flushPreferences()
-        await settle()
+        await settle(for: 400)
         checkWindow(
             panel,
             expectedSize: NSSize(width: 256, height: 196),
@@ -99,7 +99,7 @@ enum WindowSelfTest {
 
         setExpanded(false)
         flushPreferences()
-        await settle()
+        await settle(for: 400)
         checkWindow(
             panel,
             expectedSize: compactSize(for: 1.4),
@@ -118,8 +118,58 @@ enum WindowSelfTest {
             failures: &failures
         )
 
+        // Interrupt both directions of the native transition. At the 50 ms samples
+        // the panel may legitimately be between compact and expanded dimensions, so
+        // only verify that it remains present, finite, and inside a visible screen.
+        setExpanded(true)
+        flushPreferences()
+        await settle(for: 50)
+        checkWindow(
+            panel,
+            expectedSize: nil,
+            expectedAnchor: nil,
+            label: "rapid reversal while expanding",
+            failures: &failures
+        )
+
+        setExpanded(false)
+        flushPreferences()
+        await settle(for: 50)
+        checkWindow(
+            panel,
+            expectedSize: nil,
+            expectedAnchor: nil,
+            label: "rapid reversal while collapsing",
+            failures: &failures
+        )
+
+        setExpanded(true)
+        flushPreferences()
+        await settle(for: 400)
+        checkWindow(
+            panel,
+            expectedSize: NSSize(width: 256, height: 196),
+            expectedAnchor: nil,
+            label: "rapid reversal settled expanded",
+            failures: &failures
+        )
+
+        setScale(0.85)
+        flushPreferences()
+        await settle()
+        setExpanded(false)
+        flushPreferences()
+        await settle(for: 400)
+        checkWindow(
+            panel,
+            expectedSize: compactSize(for: 0.85),
+            expectedAnchor: firstResizeAnchor,
+            label: "rapid reversal collapsed selected compact size",
+            failures: &failures
+        )
+
         if failures.isEmpty {
-            print("Window self-test passed: 3 groups")
+            print("Window self-test passed: 4 groups")
             return 0
         }
 
@@ -160,8 +210,8 @@ enum WindowSelfTest {
         panel.setFrame(frame, display: true, animate: false)
     }
 
-    private static func settle() async {
-        try? await Task.sleep(nanoseconds: 100_000_000)
+    private static func settle(for milliseconds: UInt64 = 100) async {
+        try? await Task.sleep(nanoseconds: milliseconds * 1_000_000)
         await Task.yield()
     }
 

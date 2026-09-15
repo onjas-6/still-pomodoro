@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var preview = false
     private var compactFrame = NSRect.zero
     private var changingFrame = false
+    private let panelAnimator = PanelAnimator()
     private var globalClickMonitor: Any?
     private var localEventMonitor: Any?
     private var appearanceObservation: NSKeyValueObservation?
@@ -59,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.identifier = NSUserInterfaceItemIdentifier("StillFloatingTimer")
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
@@ -129,20 +130,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func setExpanded(_ expanded: Bool) {
         flushWindowPreferences()
         guard panelState.expanded != expanded else { return }
-        if expanded {
-            compactFrame = panel.frame
-            panelState.expanded = true
-            panel.hasShadow = true
-            let frame = NSRect(x: compactFrame.midX - expandedSize.width / 2, y: compactFrame.maxY - expandedSize.height,
-                               width: expandedSize.width, height: expandedSize.height)
-            setPanelFrame(fit(frame))
-            panel.makeKeyAndOrderFront(nil)
-        } else {
-            panelState.expanded = false
-            panel.hasShadow = false
-            setPanelFrame(fit(compactFrame))
-            panel.resignKey()
-        }
+        if expanded && !panelAnimator.isAnimating { compactFrame = panel.frame }
+        panelState.expanded = expanded
+        let target = expanded
+            ? NSRect(x: compactFrame.midX - expandedSize.width / 2, y: compactFrame.maxY - expandedSize.height,
+                     width: expandedSize.width, height: expandedSize.height)
+            : compactFrame
+        transitionPanel(to: fit(target), expanded: expanded)
+        if expanded { panel.makeKeyAndOrderFront(nil) }
+    }
+    private func transitionPanel(to frame: NSRect, expanded: Bool) {
+        let startReveal = panelState.expansion
+        let endReveal: CGFloat = expanded ? 1 : 0
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        panel.isMovableByWindowBackground = false
+        panelAnimator.animate(from: panel.frame, to: frame,
+                              duration: reduceMotion ? 0 : (expanded ? 0.30 : 0.24),
+                              update: { [weak self] frame, progress in
+            guard let self else { return }
+            self.panelState.expansion = startReveal + (endReveal - startReveal) * progress
+            self.setPanelFrame(frame)
+        }, completion: { [weak self] in
+            guard let self else { return }
+            self.panel.isMovableByWindowBackground = true
+            self.panel.invalidateShadow()
+            if !self.panelState.expanded { self.panel.resignKey() }
+        })
     }
     private func setupDismissal() {
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -189,7 +202,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         compactFrame.size = compactSize
         compactFrame.origin.y += oldSize.height - compactSize.height
         compactFrame = fit(compactFrame)
-        if !panelState.expanded { setPanelFrame(compactFrame) }
+        if !panelState.expanded {
+            if panelAnimator.isAnimating { transitionPanel(to: compactFrame, expanded: false) }
+            else { setPanelFrame(compactFrame) }
+        }
         updateAppearance()
         saveFrame()
     }
@@ -202,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
     }
     func windowDidMove(_ notification: Notification) {
-        guard !changingFrame, notification.object as? NSWindow === panel else { return }
+        guard !changingFrame, !panelAnimator.isAnimating, notification.object as? NSWindow === panel else { return }
         if panelState.expanded {
             compactFrame.origin = NSPoint(x: panel.frame.midX - compactFrame.width / 2, y: panel.frame.maxY - compactFrame.height)
         } else { compactFrame = panel.frame }
@@ -214,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showTimer(); return true }
     func applicationWillTerminate(_ notification: Notification) {
+        panelAnimator.cancel()
         flushWindowPreferences()
         model.persist(); saveFrame()
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }

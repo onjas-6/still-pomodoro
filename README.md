@@ -12,6 +12,9 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
 
 - **Click to expand.** Choose 25 or 50 minutes and the controls disappear again.
   Set another default duration in Preferences to add a custom shortcut.
+- **A little sense of time.** A fine sage progress line fills as the session elapses; it dims when paused.
+- **Gentle motion.** The panel opens around the countdown, with a soft control reveal.
+  Rapid reversals stay smooth, and macOS Reduce Motion is respected.
 - **Quiet while you work.** Click the desktop or press Esc to collapse. Hovering
   does not open anything. Drag the digits to move the timer.
 - **Adjustable.** Resize the compact timer and change background opacity in Preferences.
@@ -92,6 +95,15 @@ and expanding/collapsing against a real native window. This opens an isolated pr
 and does not change your timer, journal, or saved window position.
 
 To regenerate assets, run `swift scripts/generate-assets.swift`.
+
+## Design references
+
+Still’s visual direction draws on [Things](https://culturedcode.com/things/blog/2025/09/things-for-os-26/)
+for restrained glass, curvature, spacing, and tactile controls;
+[Raycast Focus](https://www.raycast.com/core-features/focus) for a glanceable floating timer;
+and [Session](https://www.stayinsession.com/) for a focused timer hierarchy.
+Still keeps its own ivory, mineral green, and muted sage palette. The timer remains
+one persistent view during expansion; the fine progress line stays secondary to the time.
 
 ## License
 
