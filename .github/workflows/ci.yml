@@ -1,0 +1,15 @@
+name: macOS
+on: [push, pull_request]
+jobs:
+  test-and-build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/test.sh
+      - run: swift test
+      - run: ./scripts/build.sh
+      - run: ./build/Still.app/Contents/MacOS/Still --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Still-macOS
+          path: build/Still.app
