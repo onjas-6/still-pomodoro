@@ -1,44 +1,45 @@
-// Created 2026-09-15 · gpt-6-astra · Codex
+// Created 2026-09-15 · gpt-5.6-terra · Codex
 import SwiftUI
 import StillCore
 import UniformTypeIdentifiers
 
 struct PreferencesView: View {
     @ObservedObject var model: AppModel
-    private var palette: Palette { .named(model.preferences.theme) }
+    @Environment(\.colorScheme) private var colorScheme
+    @StoredViewState private var journalPathDraft = ""
+    private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme) }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Your rhythm.").font(.system(size: 30, design: .serif))
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Your rhythm.").font(.system(size: 27, design: .serif))
                 Text("A few small things to make Still yours.").font(.system(size: 12)).foregroundStyle(palette.secondary)
             }
-            VStack(alignment: .leading, spacing: 12) {
-                label("TIME")
-                durationRow("Focus", value: $model.preferences.focusMinutes, range: 1...180)
+
+            section("FOCUS") {
+                durationRow("Default focus", value: $model.preferences.focusMinutes, range: 1...180)
+                Text("Changes apply when you start the next timer.").font(.system(size: 10)).foregroundStyle(palette.secondary)
+            }
+
+            section("BREAKS") {
                 durationRow("Short rest", value: $model.preferences.shortBreakMinutes, range: 1...60)
                 durationRow("Long rest", value: $model.preferences.longBreakMinutes, range: 1...90)
-                Text("Changes apply to your next timer.").font(.system(size: 10)).foregroundStyle(palette.secondary)
             }
-            VStack(alignment: .leading, spacing: 12) {
-                label("ATMOSPHERE")
-                HStack(spacing: 10) {
-                    ForEach([("sage", "Sage"), ("clay", "Clay"), ("dusk", "Dusk")], id: \.0) { theme in
-                        Button {
-                            model.preferences.theme = theme.0
-                            model.savePreferences()
-                        } label: {
-                            HStack(spacing: 7) {
-                                Circle().fill(Palette.named(theme.0).ink).frame(width: 11, height: 11)
-                                Text(theme.1).font(.system(size: 12))
-                            }
-                            .padding(.horizontal, 14).padding(.vertical, 9)
-                            .background(Palette.named(theme.0).background, in: Capsule())
-                            .foregroundStyle(Palette.named(theme.0).ink)
-                            .overlay(Capsule().strokeBorder(model.preferences.theme == theme.0 ? palette.accent : palette.ink.opacity(0.1), lineWidth: 1))
-                        }.buttonStyle(.plain)
-                    }
+
+            section("APPEARANCE") {
+                Picker("Theme", selection: $model.preferences.theme) {
+                    Text("System").tag("system")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
                 }
+                .pickerStyle(.segmented)
+
+                sliderRow("Collapsed timer size", value: $model.preferences.compactScale, range: 0.8...1.4, display: "\(Int(model.preferences.compactScale * 100))%")
+                sliderRow("Background opacity", value: $model.preferences.backgroundOpacity, range: 0.15...0.9, display: "\(Int(model.preferences.backgroundOpacity * 100))%")
                 Toggle("Float above other windows", isOn: $model.preferences.floatOnTop)
+            }
+
+            section("ALERTS") {
                 HStack {
                     Toggle("Soft completion chime", isOn: $model.preferences.soundEnabled)
                     Spacer()
@@ -54,6 +55,27 @@ struct PreferencesView: View {
                     }.buttonStyle(.link).font(.system(size: 10))
                 }
             }
+
+            section("MARKDOWN JOURNAL") {
+                TextField("Journal path", text: $journalPathDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                HStack(spacing: 9) {
+                    Button("Save path", action: saveJournalPath)
+                    Button("Choose…", action: chooseJournal)
+                    Button("Use existing…", action: chooseExistingJournal)
+                    Button("Open Markdown") { model.openJournal() }
+                    Spacer()
+                }
+                .controlSize(.small)
+                if !model.journalDisplayPath.isEmpty {
+                    Text(model.journalDisplayPath).font(.system(size: 10)).foregroundStyle(palette.secondary).lineLimit(1).truncationMode(.middle)
+                }
+                if let error = model.journalError {
+                    Text(error).font(.system(size: 10)).foregroundStyle(.orange)
+                }
+            }
+
             Divider().overlay(palette.ink.opacity(0.07))
             HStack {
                 Image(systemName: "lock.shield").font(.system(size: 13))
@@ -62,18 +84,30 @@ struct PreferencesView: View {
             if let error = model.storageError { Text(error).font(.caption).foregroundStyle(.orange) }
         }
         .toggleStyle(.switch).controlSize(.small).tint(palette.ink)
-        .padding(30).frame(width: 430)
+        .padding(28).frame(width: 440)
         .background(palette.background).foregroundStyle(palette.ink)
-        .preferredColorScheme(model.preferences.theme == "dusk" ? .dark : .light)
+        .preferredColorScheme(model.preferences.preferredColorScheme())
+        .onAppear { journalPathDraft = model.preferences.journalPath }
+        .onChange(of: model.preferences.journalPath) { _, path in journalPathDraft = path }
         .onChange(of: model.preferences.focusMinutes) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.shortBreakMinutes) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.longBreakMinutes) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.theme) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.compactScale) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.backgroundOpacity) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.floatOnTop) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.soundEnabled) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.notificationsEnabled) { _, _ in model.savePreferences() }
     }
+
     private func label(_ text: String) -> some View {
         Text(text).font(.system(size: 9, weight: .semibold)).tracking(2).foregroundStyle(palette.secondary)
+    }
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            label(title)
+            content()
+        }
     }
     private func durationRow(_ title: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
         HStack {
@@ -83,12 +117,44 @@ struct PreferencesView: View {
             Stepper(title, value: value, in: range).labelsHidden().fixedSize()
         }
     }
+    private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, display: String) -> some View {
+        HStack(spacing: 12) {
+            Text(title).font(.system(size: 12))
+            Slider(value: value, in: range, step: 0.05).frame(width: 120)
+            Text(display).font(.system(size: 10)).monospacedDigit().foregroundStyle(palette.secondary).frame(width: 32, alignment: .trailing)
+        }
+    }
+    private func saveJournalPath() {
+        if model.setJournalPath(journalPathDraft) { journalPathDraft = model.preferences.journalPath }
+    }
+    private func chooseJournal() {
+        let panel = NSSavePanel()
+        panel.title = "Choose session journal"
+        panel.message = "Existing contents are preserved."
+        panel.allowedContentTypes = [UTType(filenameExtension: "md")!]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = journalPathDraft.isEmpty ? "Still sessions.md" : URL(fileURLWithPath: journalPathDraft).lastPathComponent
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if model.setJournalPath(url.path) { journalPathDraft = model.preferences.journalPath }
+    }
+    private func chooseExistingJournal() {
+        let panel = NSOpenPanel()
+        panel.title = "Open session journal"
+        panel.message = "Still appends completed focus sessions and preserves existing contents."
+        panel.allowedContentTypes = [UTType(filenameExtension: "md")!]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if model.setJournalPath(url.path) { journalPathDraft = model.preferences.journalPath }
+    }
 }
 
 struct HistoryView: View {
     @ObservedObject var model: AppModel
     @StoredViewState private var exportError: String? = nil
-    private var palette: Palette { .named(model.preferences.theme) }
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme) }
     private var days: [Date] { (0..<7).reversed().compactMap { Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: model.now)) } }
     private func count(_ day: Date) -> Int { model.sessions.filter { Calendar.current.isDate($0.completedAt, inSameDayAs: day) }.count }
     var body: some View {
@@ -99,7 +165,12 @@ struct HistoryView: View {
                     Text("Small beginnings add up.").font(.system(size: 12)).foregroundStyle(palette.secondary)
                 }
                 Spacer()
-                Button(action: export) { Image(systemName: "square.and.arrow.up") }.buttonStyle(.plain).help("Export session history as JSON")
+                HStack(spacing: 12) {
+                    Button { model.openJournal() } label: { Image(systemName: "doc.text") }
+                        .buttonStyle(.plain).help("Open session journal")
+                    Button(action: export) { Image(systemName: "square.and.arrow.up") }
+                        .buttonStyle(.plain).help("Export session history as JSON")
+                }
             }
             HStack(spacing: 0) {
                 metric("\(model.todaySessions.count)", "TODAY")
@@ -149,7 +220,7 @@ struct HistoryView: View {
             }
         }
         .padding(30).frame(width: 450).background(palette.background).foregroundStyle(palette.ink)
-        .preferredColorScheme(model.preferences.theme == "dusk" ? .dark : .light)
+        .preferredColorScheme(model.preferences.preferredColorScheme())
         .alert("Could not export", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
             Button("OK") { exportError = nil }
         } message: { Text(exportError ?? "") }

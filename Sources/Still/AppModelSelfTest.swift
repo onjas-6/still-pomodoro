@@ -25,12 +25,15 @@ enum AppModelSelfTest {
             testRunningTimerRestoresDeadline(in: root.appendingPathComponent("running", isDirectory: true), recorder: &recorder)
             testExpiredFocusCompletesOnOpen(in: root.appendingPathComponent("expired", isDirectory: true), recorder: &recorder)
             testCorruptArchiveIsPreserved(in: root.appendingPathComponent("corrupt", isDirectory: true), recorder: &recorder)
+            testFocusPresetDoesNotRestart(in: root.appendingPathComponent("preset", isDirectory: true), recorder: &recorder)
+            testJournalPathAppendAndRestore(in: root.appendingPathComponent("journal", isDirectory: true), recorder: &recorder)
+            testLegacyPreferencesDecode(in: root.appendingPathComponent("legacy", isDirectory: true), recorder: &recorder)
         } catch {
             recorder.fail("Unable to create self-test workspace: \(error)")
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 7 test groups")
+            print("AppModel self-test passed: 10 test groups")
             return 0
         }
 
@@ -70,7 +73,7 @@ enum AppModelSelfTest {
         model.preferences.soundEnabled = false
         model.preferences.notificationsEnabled = false
         model.preferences.floatOnTop = false
-        model.preferences.theme = "dusk"
+        model.preferences.theme = "dark"
         model.savePreferences()
 
         model.selectMode(.shortBreak)
@@ -92,7 +95,7 @@ enum AppModelSelfTest {
         recorder.check(!restored.preferences.soundEnabled, "settings: sound preference restores")
         recorder.check(!restored.preferences.notificationsEnabled, "settings: notification preference restores")
         recorder.check(!restored.preferences.floatOnTop, "settings: floating-window preference restores")
-        recorder.check(restored.preferences.theme == "dusk", "settings: theme restores")
+        recorder.check(restored.preferences.theme == "dark", "settings: theme restores")
     }
 
     private static func testPauseAndResetDoNotArchive(in directory: URL, recorder: inout Recorder) {
@@ -217,6 +220,79 @@ enum AppModelSelfTest {
             }
         } catch {
             recorder.fail("corrupt archive: fixture failed: \(error)")
+        }
+    }
+
+    private static func testFocusPresetDoesNotRestart(in directory: URL, recorder: inout Recorder) {
+        let model = AppModel(dataDirectory: directory)
+        prepareForTimerUse(model, focusMinutes: 25)
+
+        model.startFocus(minutes: 50)
+        let originalDeadline = model.timer.deadline
+        let originalSessionID = model.timer.sessionID
+        model.startFocus(minutes: 25)
+
+        recorder.check(model.timer.phase == .running, "preset: 50-minute start begins focus")
+        recorder.check(model.timer.mode == .focus, "preset: start remains in focus mode")
+        recorder.check(model.timer.duration == 50 * 60, "preset: 50-minute duration is applied")
+        recorder.check(model.timer.deadline == originalDeadline, "preset: start is ignored while timer is in progress")
+        recorder.check(model.timer.sessionID == originalSessionID, "preset: in-progress start keeps session identity")
+    }
+
+    private static func testJournalPathAppendAndRestore(in directory: URL, recorder: inout Recorder) {
+        let stateDirectory = directory.appendingPathComponent("state", isDirectory: true)
+        let journalURL = directory.appendingPathComponent("sessions.md")
+        let model = AppModel(dataDirectory: stateDirectory)
+        prepareForTimerUse(model, focusMinutes: 1)
+
+        recorder.check(model.setJournalPath(journalURL.path), "journal: accepts a writable absolute Markdown path")
+        model.startFocus(minutes: 1)
+        guard let startedAt = model.timer.startedAt else {
+            recorder.fail("journal: focus timer did not start")
+            return
+        }
+        model.advance(to: startedAt.addingTimeInterval(61))
+
+        do {
+            let written = try MarkdownJournal.read(from: journalURL)
+            recorder.check(model.sessions.count == 1, "journal: completed focus remains in local archive")
+            recorder.check(written.count == 1, "journal: completed focus appends one Markdown row")
+            recorder.check(written.first?.id == model.sessions.first?.id, "journal: Markdown row has local session identity")
+
+            let restored = AppModel(dataDirectory: stateDirectory)
+            recorder.check(restored.sessions.count == 1, "journal: local archive restores one session")
+            recorder.check(try MarkdownJournal.read(from: journalURL).count == 1, "journal: restore does not duplicate Markdown rows")
+            recorder.check(restored.setJournalPath(journalURL.path), "journal: resetting the same path succeeds")
+            recorder.check(try MarkdownJournal.read(from: journalURL).count == 1, "journal: resetting the path remains idempotent")
+        } catch {
+            recorder.fail("journal: could not read persisted Markdown: \(error)")
+        }
+    }
+
+    private static func testLegacyPreferencesDecode(in directory: URL, recorder: inout Recorder) {
+        let legacyJSON = Data("""
+        {
+          "focusMinutes": 48,
+          "shortBreakMinutes": 7,
+          "longBreakMinutes": 21,
+          "soundEnabled": false,
+          "notificationsEnabled": false,
+          "floatOnTop": false,
+          "theme": "dusk"
+        }
+        """.utf8)
+
+        do {
+            let preferences = try JSONDecoder().decode(Preferences.self, from: legacyJSON)
+            recorder.check(preferences.focusMinutes == 48, "legacy preferences: focus duration is retained")
+            recorder.check(preferences.shortBreakMinutes == 7, "legacy preferences: short-break duration is retained")
+            recorder.check(preferences.longBreakMinutes == 21, "legacy preferences: long-break duration is retained")
+            recorder.check(preferences.theme == "system", "legacy preferences: v1 theme maps to system")
+            recorder.check(preferences.compactScale == 1, "legacy preferences: missing compact scale defaults")
+            recorder.check(preferences.backgroundOpacity == 0.5, "legacy preferences: missing opacity defaults")
+            recorder.check(preferences.journalPath.isEmpty, "legacy preferences: missing journal path defaults empty")
+        } catch {
+            recorder.fail("legacy preferences: decoding failed: \(error)")
         }
     }
 

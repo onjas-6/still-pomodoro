@@ -1,35 +1,30 @@
 <div align="center">
-  <img src="Resources/AppIcon.png" width="108" alt="Still icon: a botanical clock in warm ivory and sage">
+  <img src="Resources/AppIcon.png" width="90" alt="Still botanical clock icon">
   <h1>Still</h1>
-  <p>A little room to focus.</p>
-  <p>A quiet, native macOS Pomodoro timer that lives above your work.</p>
+  <p>A tiny, quiet macOS focus timer.</p>
 </div>
 
-<p align="center"><img src="Resources/Preview.png" width="320" alt="Still floating timer with large minutes and smaller seconds"></p>
+## Out of your way
 
-## Small by design
+A native SwiftUI + AppKit companion that sits lightly above your desktop.
+**128 × 52 points** by default. Just the countdown: clear minutes and smaller,
+softer seconds on a translucent surface. No accounts, analytics, or network requests.
 
-Still is a resizable floating companion, built with SwiftUI and AppKit. Warm ivory,
-sage, and a touch of brass. Large minutes, smaller, softer seconds. No accounts,
-analytics, subscriptions, web views, or network requests.
-
-- **A gentle floating timer.** Drag its background to move it; drag the bottom-right
-  grip to resize it. Pick a size or turn off “Always on top” in the ··· menu.
-- **Your rhythm.** Focus, short rest, and long rest, with adjustable durations.
-  Defaults are 25 / 5 / 15 minutes. After every fourth focus session today, the
-  next rest offered is a long one. Each interval starts when you choose.
-- **A quiet ending.** Native local notifications and an original, soft two-note
-  chime. Preview or mute the chime in Preferences.
-- **A local record.** Completed focus sessions, minutes focused, a seven-day view,
-  and JSON export. Interrupted sessions and breaks do not inflate your count.
-- **Three atmospheres.** Sage, Clay, and Dusk.
-- **A clock you can trust.** Absolute deadlines preserve timing across sleep and
-  relaunch. Pausing preserves the remaining time. Completion is recorded once.
+- **Click to expand.** Choose 25 or 50 minutes and the controls disappear again.
+  Set another default duration in Preferences to add a custom shortcut.
+- **Quiet while you work.** Click the desktop or press Esc to collapse. Hovering
+  does not open anything. Drag the digits to move the timer.
+- **Adjustable.** Resize the compact timer and change background opacity in Preferences.
+- **Follows your Mac.** System light/dark mode by default, with manual overrides.
+- **Your sessions, in Markdown.** Pick an existing `.md` file or a new path. Still
+  appends completed focus sessions, preserving your notes and avoiding duplicates.
+- **Gentle endings.** Local notifications and an original soft two-note chime.
+- **Reliable timing.** Pause/resume, sleep/wake, and relaunch use absolute deadlines.
+  Breaks and unfinished intervals never count as focus sessions.
 
 ## Build and run
 
-Requires macOS 14 or newer and Swift 6 (Xcode or the Command Line Tools).
-There are no third-party dependencies.
+macOS 14+ and Swift 6 (Xcode or Command Line Tools). No third-party dependencies.
 
 ```sh
 git clone https://github.com/onjas-6/still-pomodoro.git
@@ -38,54 +33,59 @@ cd still-pomodoro
 open build/Still.app
 ```
 
-You can also open `Package.swift` in Xcode to work on the source. Use the bundled
-`.app` to run Still: notifications require an application bundle with a stable
-identifier. The build script signs locally with an ad-hoc signature; a Developer
-ID and notarization are required for a normal trusted public binary release.
-Set `CODE_SIGN_IDENTITY` to use your own signing identity.
+Open `Package.swift` in Xcode to develop. Run the bundled `.app` so macOS can identify
+it for notifications. Builds are ad-hoc signed for local use. Public trusted binary
+releases need Developer ID signing and notarization; set `CODE_SIGN_IDENTITY` to use
+your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewhere.
 
 ## Use
 
-1. Click **Begin focus**. Allow notifications when macOS asks.
-2. Click **Pause** / **Continue**, or press Space while the timer has keyboard focus.
-3. When the timer finishes, click **Take a breath** to start a rest.
-4. Click the session count to see your history. Use **··· → Preferences** to change
-   duration, color, sound, and floating behavior.
+1. Click the small countdown, then **25 min** or **50 min** to start.
+2. Click it again to pause, continue, reset, start a break, or open preferences.
+3. In Preferences, choose **System / Light / Dark**, timer size, and background opacity.
+4. Under **Markdown journal**, enter a path and click **Save path**, or choose a file.
+   Use **Open Markdown** to see the actual record in your editor.
 
-Still also lives in the menu bar. **Hide Still** hides only the floating window;
-its timer continues. Open it again from the leaf menu bar icon. Quitting leaves a
-running timer’s scheduled system notification intact; the session is recorded the
-next time Still opens. Notifications respect macOS notification and Focus settings.
-A sleeping Mac does not play a chime until it can deliver the notification or wake.
+After quitting Still, you can also set the path from a terminal:
+`./build/Still.app/Contents/MacOS/Still --journal /path/to/focus-sessions.md`.
 
-## Local data
+The menu-bar leaf can show or hide the timer, open history, or quit. Hidden timers
+keep running. Quitting leaves an already-scheduled notification intact; a completed
+session is reconciled on the next launch. Notifications and sounds respect macOS
+Focus and notification settings; a sleeping Mac cannot play audio until wake/delivery.
 
-Session history, preferences, and the active timer are stored atomically at:
+## Your data
 
-```text
-~/Library/Application Support/Still/state.json
-```
+The default journal destination is `~/Documents/Still-sessions.md`. You can place
+it anywhere writable, including your own notes folder. Existing Markdown content is
+preserved. Each entry includes a readable local timestamp, timezone, duration, and
+an invisible session identifier for reliable synchronization.
 
-Window position and size are stored in the app’s macOS preferences. Use the export
-button in Session History for a portable JSON copy. Still makes no network requests.
-If saved JSON cannot be read, Still preserves a backup before creating new data.
+A small recovery cache at `~/Library/Application Support/Still/state.json` keeps the
+active timer, preferences, and sessions so a failed Markdown write does not lose your
+work. The app shows write errors and retries on launch or when the path is saved
+again. Changing the journal path preserves existing contents and carries your session
+history into the selected file. Keep hidden Still metadata comments if you edit the
+journal, so the app can recognize entries and avoid duplicating them.
+
+Window position lives in macOS app preferences. No data leaves your Mac through Still.
+Any cloud synchronization is controlled by the folder you choose.
 
 ## Development
 
 ```sh
-./scripts/test.sh                              # core checks, including CLT-only Macs
-swift test                                     # XCTest suite, with full Xcode
+./scripts/test.sh                              # timer core, including CLT-only Macs
+./scripts/test-journal.sh                      # Markdown preservation and round-trip checks
+swift test                                    # XCTest, with full Xcode
 ./scripts/build.sh
-./build/Still.app/Contents/MacOS/Still --self-test  # isolated local persistence checks
+./build/Still.app/Contents/MacOS/Still --self-test  # isolated persistence checks
 ```
 
-- `Sources/StillCore` — deterministic timer state machine and session model.
-- `Sources/Still` — native windows, SwiftUI views, JSON storage, notifications.
+- `Sources/StillCore` — timer state machine, sessions, Markdown journal.
+- `Sources/Still` — compact panel, controls, preferences, notifications, recovery cache.
 - `scripts/generate-assets.swift` — reproducible original icon and chime.
-- `Resources` — app metadata, icon, and PCM audio.
 
-To regenerate the assets, run `swift scripts/generate-assets.swift` from the
-repository root. Tests use temporary directories and do not touch your session history.
+Tests use temporary data. To regenerate assets, run `swift scripts/generate-assets.swift`.
 
 ## License
 

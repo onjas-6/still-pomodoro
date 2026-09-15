@@ -4,18 +4,8 @@ import Combine
 import StillCore
 import UserNotifications
 
-struct Preferences: Codable {
-    var focusMinutes = 25
-    var shortBreakMinutes = 5
-    var longBreakMinutes = 15
-    var soundEnabled = true
-    var notificationsEnabled = true
-    var floatOnTop = true
-    var theme = "sage"
-}
-
 struct LocalArchive: Codable {
-    var version = 1
+    var version = 2
     var timer = TimerState()
     var sessions: [FocusSession] = []
     var preferences = Preferences()
@@ -29,6 +19,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @Published private(set) var now = Date()
     @Published var storageError: String?
     @Published var notificationStatus = "Not requested"
+    @Published var journalError: String?
     var onWindowPreferencesChanged: (() -> Void)?
     private var pulse: AnyCancellable?
     private var sound: NSSound?
@@ -45,6 +36,10 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             .appendingPathComponent("Still", isDirectory: true)).appendingPathComponent("state.json")
         super.init()
         if !preview { load() }
+        if preferences.journalPath.isEmpty {
+            let directory = dataDirectory != nil ? dataURL.deletingLastPathComponent() : FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            preferences.journalPath = directory.appendingPathComponent("Still-sessions.md").path
+        }
         UNUserNotificationCenter.current().delegate = self
         // Reconcile a deadline that elapsed while Still was closed, without replaying an old chime.
         let restoringRunningTimer = timer.phase == .running
@@ -55,6 +50,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
         if !preview {
+            if !sessions.isEmpty || FileManager.default.fileExists(atPath: preferences.journalPath) { synchronizeJournal() }
             Task { await refreshNotificationStatus() }
             if timer.phase == .running { syncNotification(requestPermission: false) }
         }
@@ -105,6 +101,22 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         persist()
         syncNotification(requestPermission: timer.phase == .running)
     }
+    func startFocus(minutes: Int) {
+        guard !isInProgress else { return }
+        now = Date()
+        timer.configure(mode: .focus, duration: Double(min(180, max(1, minutes)) * 60))
+        timer.start(at: now)
+        persist()
+        syncNotification(requestPermission: true)
+    }
+    func startBreak(_ mode: TimerMode) {
+        guard !isInProgress, mode != .focus else { return }
+        now = Date()
+        timer.configure(mode: mode, duration: duration(for: mode))
+        timer.start(at: now)
+        persist()
+        syncNotification(requestPermission: true)
+    }
     func selectMode(_ mode: TimerMode) {
         guard !isInProgress else { return }
         timer.configure(mode: mode, duration: duration(for: mode))
@@ -119,9 +131,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         syncNotification(requestPermission: false)
     }
     func savePreferences() {
-        preferences.focusMinutes = min(180, max(1, preferences.focusMinutes))
-        preferences.shortBreakMinutes = min(60, max(1, preferences.shortBreakMinutes))
-        preferences.longBreakMinutes = min(90, max(1, preferences.longBreakMinutes))
+        preferences.sanitize()
         if timer.phase == .ready { timer.configure(mode: timer.mode, duration: duration(for: timer.mode)) }
         persist()
         onWindowPreferencesChanged?()
@@ -130,7 +140,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     func advance(to date: Date) {
         now = date
         let wasRunning = timer.phase == .running
-        if let session = timer.tick(at: date) { add(session); persist() }
+        if let session = timer.tick(at: date) { add(session); persist(); synchronizeJournal() }
         if wasRunning && timer.phase == .completed {
             persist()
             if preferences.soundEnabled && !systemChimeScheduled { playChime() }
@@ -139,6 +149,65 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @objc private func woke() { advance(to: Date()) }
     private func add(_ session: FocusSession) {
         if !sessions.contains(where: { $0.id == session.id }) { sessions.append(session) }
+    }
+    var journalDisplayPath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return preferences.journalPath.hasPrefix(home + "/") ? "~" + preferences.journalPath.dropFirst(home.count) : preferences.journalPath
+    }
+    @discardableResult
+    func setJournalPath(_ path: String) -> Bool {
+        guard !isPreview else { preferences.journalPath = path; return true }
+        let expanded = (path.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/"), !expanded.isEmpty else {
+            journalError = "Choose an absolute path ending in .md."
+            return false
+        }
+        let url = URL(fileURLWithPath: expanded).standardizedFileURL
+        do {
+            let existing = FileManager.default.fileExists(atPath: url.path) ? try MarkdownJournal.read(from: url) : []
+            var merged = sessions
+            var ids = Set(merged.map(\.id))
+            merged.append(contentsOf: existing.filter { ids.insert($0.id).inserted })
+            merged.sort { $0.completedAt < $1.completedAt }
+            try MarkdownJournal.synchronize(sessions: merged, to: url)
+            sessions = merged
+            preferences.journalPath = url.path
+            journalError = nil
+            persist()
+            return true
+        } catch {
+            journalError = "Could not use this Markdown file: \(error.localizedDescription)"
+            return false
+        }
+    }
+    private func synchronizeJournal() {
+        guard !isPreview, !preferences.journalPath.isEmpty else { return }
+        do {
+            let url = URL(fileURLWithPath: preferences.journalPath)
+            if FileManager.default.fileExists(atPath: url.path) {
+                let existing = try MarkdownJournal.read(from: url)
+                var ids = Set(sessions.map(\.id))
+                let imported = existing.filter { ids.insert($0.id).inserted }
+                if !imported.isEmpty {
+                    sessions.append(contentsOf: imported)
+                    sessions.sort { $0.completedAt < $1.completedAt }
+                    persist()
+                }
+            }
+            try MarkdownJournal.synchronize(sessions: sessions, to: url)
+            journalError = nil
+        } catch {
+            journalError = "Markdown could not be updated. Your session is retained locally; reopen Still or save the path again to retry. \(error.localizedDescription)"
+        }
+    }
+    func openJournal() {
+        if !FileManager.default.fileExists(atPath: preferences.journalPath) {
+            guard setJournalPath(preferences.journalPath) else { return }
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: preferences.journalPath))
+    }
+    func showJournalInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: preferences.journalPath)])
     }
     func playChime() {
         guard let url = Bundle.main.url(forResource: "StillChime", withExtension: "aiff") else { return }

@@ -6,6 +6,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./scripts/test.sh
+      - run: ./scripts/test-journal.sh
       - run: swift test
       - run: ./scripts/build.sh
       - run: ./build/Still.app/Contents/MacOS/Still --self-test
