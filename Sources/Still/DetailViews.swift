@@ -47,7 +47,7 @@ struct PreferencesView: View {
                 }
                 .pickerStyle(.segmented)
 
-                sliderRow("Collapsed timer size", value: $model.preferences.compactScale, range: 0.8...1.4, display: "\(Int(model.preferences.compactScale * 100))%")
+                sliderRow("Collapsed timer size", value: $model.preferences.compactScale, range: Preferences.compactScaleRange, display: "\(Int((model.preferences.compactScale * 100).rounded()))%")
                 sliderRow("Background opacity", value: $model.preferences.backgroundOpacity, range: 0.15...0.9, display: "\(Int(model.preferences.backgroundOpacity * 100))%")
                 Toggle("Float above other windows", isOn: $model.preferences.floatOnTop)
             }

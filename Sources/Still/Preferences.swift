@@ -4,6 +4,7 @@ import SwiftUI
 
 struct Preferences: Codable {
     static let defaultFocusPresets = [30, 45, 60]
+    static let compactScaleRange = 0.8...3.0
 
     var focusMinutes: Int
     var focusPresets: [Int]
@@ -38,7 +39,7 @@ struct Preferences: Codable {
         self.notificationsEnabled = notificationsEnabled
         self.floatOnTop = floatOnTop
         self.theme = Self.normalizedTheme(theme)
-        self.compactScale = Self.clamp(compactScale, to: 0.8...1.4)
+        self.compactScale = Self.clamp(compactScale, to: Self.compactScaleRange)
         self.backgroundOpacity = Self.clamp(backgroundOpacity, to: 0.15...0.9)
         self.journalPath = journalPath
     }
@@ -85,7 +86,7 @@ struct Preferences: Codable {
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
         try container.encode(floatOnTop, forKey: .floatOnTop)
         try container.encode(Self.normalizedTheme(theme), forKey: .theme)
-        try container.encode(Self.clamp(compactScale, to: 0.8...1.4), forKey: .compactScale)
+        try container.encode(Self.clamp(compactScale, to: Self.compactScaleRange), forKey: .compactScale)
         try container.encode(Self.clamp(backgroundOpacity, to: 0.15...0.9), forKey: .backgroundOpacity)
         try container.encode(journalPath, forKey: .journalPath)
     }
@@ -96,7 +97,7 @@ struct Preferences: Codable {
         shortBreakMinutes = Self.clamp(shortBreakMinutes, to: 1...60)
         longBreakMinutes = Self.clamp(longBreakMinutes, to: 1...90)
         theme = Self.normalizedTheme(theme)
-        compactScale = Self.clamp(compactScale, to: 0.8...1.4)
+        compactScale = Self.clamp(compactScale, to: Self.compactScaleRange)
         backgroundOpacity = Self.clamp(backgroundOpacity, to: 0.15...0.9)
     }
 

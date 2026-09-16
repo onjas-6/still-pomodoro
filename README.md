@@ -17,7 +17,8 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   Rapid reversals stay smooth, and macOS Reduce Motion is respected.
 - **Quiet while you work.** Click the desktop or press Esc to collapse. Hovering
   does not open anything. Drag the digits to move the timer.
-- **Adjustable.** Resize the compact timer and change background opacity in Preferences.
+- **Adjustable.** Scale the compact timer from 80% to 300% (up to 384 × 156 points)
+  and change background opacity in Preferences.
 - **Follows your Mac.** System light/dark mode by default, with manual overrides.
 - **Your sessions, in Markdown.** Pick an existing `.md` file or a new path. Still
   appends completed focus sessions, preserving your notes and avoiding duplicates.

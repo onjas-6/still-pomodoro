@@ -247,6 +247,28 @@ enum AppModelSelfTest {
         recorder.check(defaults.focusMinutes == 30, "preset preferences: default focus duration is 30 minutes")
         recorder.check(defaults.focusPresets == [30, 45, 60], "preset preferences: default slots are 30, 45, and 60 minutes")
 
+        let maximumScale = Preferences(compactScale: 3.0)
+        recorder.check(maximumScale.compactScale == 3.0, "compact scale: initializer preserves 3.0")
+        recorder.check(Preferences(compactScale: 4.0).compactScale == 3.0, "compact scale: initializer clamps 4.0 to 3.0")
+
+        do {
+            let encoded = try JSONEncoder().encode(maximumScale)
+            let encodedScale = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+            recorder.check(encodedScale?["compactScale"] as? Double == 3.0, "compact scale: encoding preserves 3.0")
+
+            let decoded = try JSONDecoder().decode(Preferences.self, from: encoded)
+            recorder.check(decoded.compactScale == 3.0, "compact scale: decoding preserves 3.0")
+        } catch {
+            recorder.fail("compact scale: preference round trip failed: \(error)")
+        }
+
+        let scalePersistenceDirectory = directory.appendingPathComponent("scale-persistence", isDirectory: true)
+        let scaleModel = AppModel(dataDirectory: scalePersistenceDirectory)
+        scaleModel.preferences.compactScale = 3.0
+        scaleModel.savePreferences()
+        let restoredScaleModel = AppModel(dataDirectory: scalePersistenceDirectory)
+        recorder.check(restoredScaleModel.preferences.compactScale == 3.0, "compact scale: persistence preserves 3.0")
+
         let clamped = Preferences(focusPresets: [0, 500])
         recorder.check(clamped.focusPresets == [1, 180, 60], "preset preferences: short out-of-range arrays clamp and fill by slot")
 

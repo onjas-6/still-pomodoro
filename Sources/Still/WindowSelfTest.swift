@@ -48,7 +48,7 @@ enum WindowSelfTest {
         )
 
         for cycle in 1...3 {
-            for scale in [0.8, 1.4, 1.0, 0.85, 0.8] {
+            for scale in [0.8, 1.4, 2.0, 2.5, 3.0, 1.0, 0.85, 0.8] {
                 await applyScale(
                     scale,
                     panel: panel,
@@ -65,6 +65,7 @@ enum WindowSelfTest {
         // changes. There is deliberately no explicit flush before this settle.
         setScale(0.85)
         setScale(1.4)
+        setScale(3.0)
         setScale(0.8)
         await settle()
         checkWindow(
@@ -86,7 +87,7 @@ enum WindowSelfTest {
             failures: &failures
         )
 
-        setScale(1.4)
+        setScale(3.0)
         flushPreferences()
         await settle()
         checkWindow(
@@ -102,7 +103,7 @@ enum WindowSelfTest {
         await settle(for: 400)
         checkWindow(
             panel,
-            expectedSize: compactSize(for: 1.4),
+            expectedSize: NSSize(width: 384, height: 156),
             expectedAnchor: firstResizeAnchor,
             label: "collapse after expanded scale change",
             failures: &failures
