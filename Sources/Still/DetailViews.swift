@@ -79,6 +79,10 @@ struct PreferencesView: View {
                 }
             }
 
+            section("INSPIRATION") {
+                InspirationPreferences(store: model.inspiration, palette: palette)
+            }
+
             Divider().overlay(palette.ink.opacity(0.07))
             HStack {
                 Image(systemName: "lock.shield").font(.system(size: 13))

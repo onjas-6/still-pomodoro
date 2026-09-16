@@ -50,11 +50,13 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private var journalPathWaiters: [Int: CheckedContinuation<Bool, Never>] = [:]
     let dataURL: URL
     let isPreview: Bool
+    let inspiration: InspirationStore
 
     init(dataDirectory: URL? = nil, preview: Bool = false, syncJournalOnLaunch: Bool = true) {
         isPreview = preview
         dataURL = (dataDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Still", isDirectory: true)).appendingPathComponent("state.json")
+        inspiration = InspirationStore(directory: dataURL.deletingLastPathComponent(), preview: preview)
         super.init()
         if !preview { load() }
         let hadStoredJournalPath = !preferences.journalPath.isEmpty

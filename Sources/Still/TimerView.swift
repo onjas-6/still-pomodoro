@@ -82,7 +82,10 @@ struct TimerView: View {
             .frame(width: size.width, height: size.height)
             .overlay(alignment: .topLeading) {
                 // Keep the fixed-width controls out of the compact layout's size proposal.
-                controls
+                VStack(spacing: 12) {
+                    controls
+                    InspirationView(store: model.inspiration, palette: palette)
+                }
                     .frame(width: 220)
                     .offset(x: (size.width - 220) / 2, y: 81 + 7 * (1 - reveal))
                     .opacity(reveal)

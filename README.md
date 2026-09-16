@@ -22,6 +22,8 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
 - **Your sessions, in Markdown.** Pick an existing `.md` file or a new path. Still
   appends completed focus sessions, preserving your notes and avoiding duplicates.
 - **Gentle endings.** Local notifications and an original soft two-note chime.
+- **A little perspective.** An expanded-only thought, with a quiet button for the next one.
+  Edit your own local collection; thoughts stay still until you choose another.
 - **Reliable timing.** Pause/resume, sleep/wake, and relaunch use absolute deadlines.
   Breaks and unfinished intervals never count as focus sessions.
 
@@ -75,11 +77,37 @@ journal, so the app can recognize entries and avoid duplicating them.
 Window position lives in macOS app preferences. No data leaves your Mac through Still.
 Any cloud synchronization is controlled by the folder you choose.
 
+### Personal reminders
+
+The expanded panel has room for a short thought. Use the arrow to advance; there is
+no automatic carousel. The collapsed timer stays the same size.
+
+Choose **Preferences → Inspiration → Edit phrases…** to open
+`~/Library/Application Support/Still/inspiration.json` in TextEdit. Save your edits,
+then reopen the timer controls to reload. An example collection is created on first edit:
+
+```json
+{
+  "version": 1,
+  "phrases": [
+    { "id": "begin", "text": "Give the next small step your attention.", "source": "My notes" }
+  ]
+}
+```
+
+Use unique IDs and short text (up to 120 characters, at most 100 entries). `source`
+is an optional short caption. Longer text can be shortened on screen; two brief lines
+fit best. Invalid edits keep the last loaded collection and show a message in Preferences.
+The app reads this single local file in the background. It does not scan your notes or
+send them anywhere. The public repository contains only generic examples; your personal
+collection and its sources belong outside the source checkout.
+
 ## Development
 
 ```sh
 ./scripts/test.sh                              # timer core, including CLT-only Macs
 ./scripts/test-journal.sh                      # Markdown preservation and round-trip checks
+./scripts/test-inspiration.sh                  # local phrase format and validation
 swift test                                    # XCTest, with full Xcode
 ./scripts/build.sh
 ./build/Still.app/Contents/MacOS/Still --self-test  # isolated persistence checks

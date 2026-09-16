@@ -80,7 +80,7 @@ enum WindowSelfTest {
         await settle(for: 400)
         checkWindow(
             panel,
-            expectedSize: NSSize(width: 256, height: 196),
+            expectedSize: NSSize(width: 256, height: 274),
             expectedAnchor: nil,
             label: "expanded panel",
             failures: &failures
@@ -91,7 +91,7 @@ enum WindowSelfTest {
         await settle()
         checkWindow(
             panel,
-            expectedSize: NSSize(width: 256, height: 196),
+            expectedSize: NSSize(width: 256, height: 274),
             expectedAnchor: nil,
             label: "expanded panel after scale change",
             failures: &failures
@@ -148,7 +148,7 @@ enum WindowSelfTest {
         await settle(for: 400)
         checkWindow(
             panel,
-            expectedSize: NSSize(width: 256, height: 196),
+            expectedSize: NSSize(width: 256, height: 274),
             expectedAnchor: nil,
             label: "rapid reversal settled expanded",
             failures: &failures

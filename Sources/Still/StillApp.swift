@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let scale = model.preferences.compactScale
         return NSSize(width: (128 * scale).rounded(), height: (52 * scale).rounded())
     }
-    private let expandedSize = NSSize(width: 256, height: 196)
+    private let expandedSize = NSSize(width: 256, height: 274)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         windowSelfTest = CommandLine.arguments.contains("--window-self-test")
@@ -130,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func setExpanded(_ expanded: Bool) {
         flushWindowPreferences()
         guard panelState.expanded != expanded else { return }
+        if expanded { model.inspiration.reload() }
         if expanded && !panelAnimator.isAnimating { compactFrame = panel.frame }
         panelState.expanded = expanded
         let target = expanded

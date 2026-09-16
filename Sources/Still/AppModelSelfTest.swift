@@ -29,12 +29,13 @@ enum AppModelSelfTest {
             testJournalPathAppendAndRestore(in: root.appendingPathComponent("journal", isDirectory: true), recorder: &recorder)
             testLegacyPreferencesDecode(in: root.appendingPathComponent("legacy", isDirectory: true), recorder: &recorder)
             testBackgroundJournalImportAndCompletion(in: root.appendingPathComponent("journal-worker", isDirectory: true), recorder: &recorder)
+            testLocalInspiration(in: root.appendingPathComponent("inspiration", isDirectory: true), recorder: &recorder)
         } catch {
             recorder.fail("Unable to create self-test workspace: \(error)")
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 11 test groups")
+            print("AppModel self-test passed: 12 test groups")
             return 0
         }
 
@@ -337,6 +338,39 @@ enum AppModelSelfTest {
         } catch {
             recorder.fail("journal worker: fixture failed: \(error)")
         }
+    }
+
+    private static func testLocalInspiration(in directory: URL, recorder: inout Recorder) {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent("inspiration.json")
+            let catalog = InspirationCatalog(phrases: [
+                Inspiration(id: "first", text: "One small step.", source: "Local notes"),
+                Inspiration(id: "second", text: "A second thought.")
+            ])
+            try catalog.encoded().write(to: url)
+            let store = InspirationStore(directory: directory)
+            store.reload()
+            recorder.check(waitUntil { !store.isLoading }, "inspiration: background load completes")
+            recorder.check(store.current.id == "first", "inspiration: local catalog loads")
+            store.advance()
+            recorder.check(store.current.id == "second", "inspiration: explicit next advances once")
+            store.reload()
+            recorder.check(waitUntil { !store.isLoading }, "inspiration: reload completes")
+            recorder.check(store.current.id == "second", "inspiration: reopening retains current thought")
+            let broken = Data("{unfinished edit".utf8)
+            try broken.write(to: url)
+            store.reload()
+            recorder.check(waitUntil { !store.isLoading }, "inspiration: invalid file load returns")
+            recorder.check(store.error != nil && store.current.id == "second", "inspiration: invalid edits keep last good thought")
+            recorder.check(try Data(contentsOf: url) == broken, "inspiration: invalid source is preserved")
+            try catalog.encoded().write(to: url)
+            store.reload()
+            recorder.check(waitUntil { !store.isLoading }, "inspiration: repaired file loads")
+            recorder.check(store.error == nil, "inspiration: repaired edits clear error")
+            store.advance()
+            recorder.check(store.current.id == "first", "inspiration: next wraps without a duplicate")
+        } catch { recorder.fail("inspiration: fixture failed: \(error)") }
     }
 
     private static func prepareForTimerUse(_ model: AppModel, focusMinutes: Int) {
