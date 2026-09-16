@@ -316,6 +316,10 @@ final class CompactHitView: NSView {
     private var dragged = false
     override var mouseDownCanMoveWindow: Bool { false }
     override var acceptsFirstResponder: Bool { true }
+    // The floating timer is usually inactive while the user works elsewhere.
+    // Deliver the first press to our click/drag handling instead of consuming it
+    // just to activate the panel.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override init(frame: NSRect) {
         super.init(frame: frame)
         setAccessibilityElement(true)
