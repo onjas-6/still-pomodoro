@@ -10,6 +10,7 @@ struct PreferencesView: View {
     private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme) }
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Your rhythm.").font(.system(size: 27, design: .serif))
@@ -18,7 +19,19 @@ struct PreferencesView: View {
 
             section("FOCUS") {
                 durationRow("Default focus", value: $model.preferences.focusMinutes, range: 1...180)
-                Text("Changes apply when you start the next timer.").font(.system(size: 10)).foregroundStyle(palette.secondary)
+                HStack(spacing: 10) {
+                    Text("Start buttons").font(.system(size: 12))
+                    Spacer()
+                    ForEach(0..<3, id: \.self) { index in
+                        HStack(spacing: 4) {
+                            DurationField(title: "Focus preset \(index + 1)", value: presetBinding(index), range: 1...180)
+                                .frame(width: 43, height: 22)
+                            Text("min").font(.system(size: 10)).foregroundStyle(palette.secondary)
+                        }
+                    }
+                }
+                Text("Type a number, then press Return. Applies to your next session.")
+                    .font(.system(size: 10)).foregroundStyle(palette.secondary)
             }
 
             section("BREAKS") {
@@ -92,11 +105,14 @@ struct PreferencesView: View {
         }
         .toggleStyle(.switch).controlSize(.small).tint(palette.ink)
         .padding(28).frame(width: 440)
+        }
+        .frame(width: 440, height: min(790, (NSScreen.main?.visibleFrame.height ?? 900) - 80))
         .background(palette.background).foregroundStyle(palette.ink)
         .preferredColorScheme(model.preferences.preferredColorScheme())
         .onAppear { journalPathDraft = model.preferences.journalPath }
         .onChange(of: model.preferences.journalPath) { _, path in journalPathDraft = path }
         .onChange(of: model.preferences.focusMinutes) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.focusPresets) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.shortBreakMinutes) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.longBreakMinutes) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.theme) { _, _ in model.savePreferences() }
@@ -120,9 +136,13 @@ struct PreferencesView: View {
         HStack {
             Text(title).font(.system(size: 12))
             Spacer()
-            Text("\(value.wrappedValue) min").font(.system(size: 12)).monospacedDigit().foregroundStyle(palette.secondary)
+            DurationField(title: title, value: value, range: range).frame(width: 50, height: 22)
+            Text("min").font(.system(size: 11)).foregroundStyle(palette.secondary)
             Stepper(title, value: value, in: range).labelsHidden().fixedSize()
         }
+    }
+    private func presetBinding(_ index: Int) -> Binding<Int> {
+        Binding(get: { model.preferences.focusPresets[index] }, set: { model.preferences.focusPresets[index] = $0 })
     }
     private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, display: String) -> some View {
         HStack(spacing: 12) {

@@ -3,7 +3,10 @@ import Foundation
 import SwiftUI
 
 struct Preferences: Codable {
+    static let defaultFocusPresets = [30, 45, 60]
+
     var focusMinutes: Int
+    var focusPresets: [Int]
     var shortBreakMinutes: Int
     var longBreakMinutes: Int
     var soundEnabled: Bool
@@ -15,7 +18,8 @@ struct Preferences: Codable {
     var journalPath: String
 
     init(
-        focusMinutes: Int = 25,
+        focusMinutes: Int = 30,
+        focusPresets: [Int] = Preferences.defaultFocusPresets,
         shortBreakMinutes: Int = 5,
         longBreakMinutes: Int = 15,
         soundEnabled: Bool = true,
@@ -27,6 +31,7 @@ struct Preferences: Codable {
         journalPath: String = ""
     ) {
         self.focusMinutes = Self.clamp(focusMinutes, to: 1...180)
+        self.focusPresets = Self.normalizedFocusPresets(focusPresets)
         self.shortBreakMinutes = Self.clamp(shortBreakMinutes, to: 1...60)
         self.longBreakMinutes = Self.clamp(longBreakMinutes, to: 1...90)
         self.soundEnabled = soundEnabled
@@ -40,6 +45,7 @@ struct Preferences: Codable {
 
     enum CodingKeys: String, CodingKey {
         case focusMinutes
+        case focusPresets
         case shortBreakMinutes
         case longBreakMinutes
         case soundEnabled
@@ -56,6 +62,7 @@ struct Preferences: Codable {
         let defaults = Preferences()
         self.init(
             focusMinutes: try container.decodeIfPresent(Int.self, forKey: .focusMinutes) ?? defaults.focusMinutes,
+            focusPresets: try container.decodeIfPresent([Int].self, forKey: .focusPresets) ?? defaults.focusPresets,
             shortBreakMinutes: try container.decodeIfPresent(Int.self, forKey: .shortBreakMinutes) ?? defaults.shortBreakMinutes,
             longBreakMinutes: try container.decodeIfPresent(Int.self, forKey: .longBreakMinutes) ?? defaults.longBreakMinutes,
             soundEnabled: try container.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? defaults.soundEnabled,
@@ -71,6 +78,7 @@ struct Preferences: Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(focusMinutes, forKey: .focusMinutes)
+        try container.encode(Self.normalizedFocusPresets(focusPresets), forKey: .focusPresets)
         try container.encode(shortBreakMinutes, forKey: .shortBreakMinutes)
         try container.encode(longBreakMinutes, forKey: .longBreakMinutes)
         try container.encode(soundEnabled, forKey: .soundEnabled)
@@ -84,6 +92,7 @@ struct Preferences: Codable {
 
     mutating func sanitize() {
         focusMinutes = Self.clamp(focusMinutes, to: 1...180)
+        focusPresets = Self.normalizedFocusPresets(focusPresets)
         shortBreakMinutes = Self.clamp(shortBreakMinutes, to: 1...60)
         longBreakMinutes = Self.clamp(longBreakMinutes, to: 1...90)
         theme = Self.normalizedTheme(theme)
@@ -106,6 +115,14 @@ struct Preferences: Codable {
         case "sage", "clay", "dusk": return "system"
         default: return "system"
         }
+    }
+
+    private static func normalizedFocusPresets(_ values: [Int]) -> [Int] {
+        var normalized = Array(values.prefix(defaultFocusPresets.count))
+        while normalized.count < defaultFocusPresets.count {
+            normalized.append(defaultFocusPresets[normalized.count])
+        }
+        return normalized.map { clamp($0, to: 1...180) }
     }
 
     private static func clamp<T: Comparable>(_ value: T, to range: ClosedRange<T>) -> T {

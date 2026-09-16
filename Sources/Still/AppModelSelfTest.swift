@@ -26,6 +26,7 @@ enum AppModelSelfTest {
             testExpiredFocusCompletesOnOpen(in: root.appendingPathComponent("expired", isDirectory: true), recorder: &recorder)
             testCorruptArchiveIsPreserved(in: root.appendingPathComponent("corrupt", isDirectory: true), recorder: &recorder)
             testFocusPresetDoesNotRestart(in: root.appendingPathComponent("preset", isDirectory: true), recorder: &recorder)
+            testFocusPresetPreferences(in: root.appendingPathComponent("preset-preferences", isDirectory: true), recorder: &recorder)
             testJournalPathAppendAndRestore(in: root.appendingPathComponent("journal", isDirectory: true), recorder: &recorder)
             testLegacyPreferencesDecode(in: root.appendingPathComponent("legacy", isDirectory: true), recorder: &recorder)
             testBackgroundJournalImportAndCompletion(in: root.appendingPathComponent("journal-worker", isDirectory: true), recorder: &recorder)
@@ -35,7 +36,7 @@ enum AppModelSelfTest {
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 12 test groups")
+            print("AppModel self-test passed: 13 test groups")
             return 0
         }
 
@@ -241,6 +242,50 @@ enum AppModelSelfTest {
         recorder.check(model.timer.sessionID == originalSessionID, "preset: in-progress start keeps session identity")
     }
 
+    private static func testFocusPresetPreferences(in directory: URL, recorder: inout Recorder) {
+        let defaults = Preferences()
+        recorder.check(defaults.focusMinutes == 30, "preset preferences: default focus duration is 30 minutes")
+        recorder.check(defaults.focusPresets == [30, 45, 60], "preset preferences: default slots are 30, 45, and 60 minutes")
+
+        let clamped = Preferences(focusPresets: [0, 500])
+        recorder.check(clamped.focusPresets == [1, 180, 60], "preset preferences: short out-of-range arrays clamp and fill by slot")
+
+        do {
+            let encoded = try JSONEncoder().encode(Preferences(focusPresets: [37, 37, 120]))
+            let decoded = try JSONDecoder().decode(Preferences.self, from: encoded)
+            recorder.check(decoded.focusPresets == [37, 37, 120], "preset preferences: round trip preserves slot order and duplicates")
+        } catch {
+            recorder.fail("preset preferences: preference round trip failed: \(error)")
+        }
+
+        for (slot, minutes) in defaults.focusPresets.enumerated() {
+            let presetModel = AppModel(dataDirectory: directory.appendingPathComponent("slot-\(slot)", isDirectory: true))
+            presetModel.startFocus(minutes: minutes)
+            recorder.check(
+                presetModel.timer.duration == Double(minutes * 60),
+                "preset preferences: slot \(slot + 1) starts a \(minutes)-minute focus timer"
+            )
+        }
+
+        let model = AppModel(dataDirectory: directory.appendingPathComponent("persistence", isDirectory: true))
+        model.preferences.focusPresets = [37, 37, 120]
+        model.savePreferences()
+        model.startFocus(minutes: 37)
+        guard let originalDeadline = model.timer.deadline, let originalSessionID = model.timer.sessionID else {
+            recorder.fail("preset preferences: persisted focus timer did not start")
+            return
+        }
+
+        model.preferences.focusPresets = [40, 40, 120]
+        model.savePreferences()
+
+        recorder.check(model.timer.deadline == originalDeadline, "preset preferences: saving while active keeps the deadline")
+        recorder.check(model.timer.sessionID == originalSessionID, "preset preferences: saving while active keeps the session identity")
+
+        let restored = AppModel(dataDirectory: directory.appendingPathComponent("persistence", isDirectory: true))
+        recorder.check(restored.preferences.focusPresets == [40, 40, 120], "preset preferences: saved slots restore in order with duplicates")
+    }
+
     private static func testJournalPathAppendAndRestore(in directory: URL, recorder: inout Recorder) {
         let stateDirectory = directory.appendingPathComponent("state", isDirectory: true)
         let journalURL = directory.appendingPathComponent("sessions.md")
@@ -291,6 +336,7 @@ enum AppModelSelfTest {
         do {
             let preferences = try JSONDecoder().decode(Preferences.self, from: legacyJSON)
             recorder.check(preferences.focusMinutes == 48, "legacy preferences: focus duration is retained")
+            recorder.check(preferences.focusPresets == [30, 45, 60], "legacy preferences: missing preset slots default")
             recorder.check(preferences.shortBreakMinutes == 7, "legacy preferences: short-break duration is retained")
             recorder.check(preferences.longBreakMinutes == 21, "legacy preferences: long-break duration is retained")
             recorder.check(preferences.theme == "system", "legacy preferences: v1 theme maps to system")

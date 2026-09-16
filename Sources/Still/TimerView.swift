@@ -144,10 +144,18 @@ struct TimerView: View {
             } else {
                 Text(model.timer.phase == .completed ? "A MOMENT, WELL SPENT" : "MAKE ROOM FOR FOCUS")
                     .font(.system(size: 8.5, weight: .medium)).tracking(1.25).foregroundStyle(palette.secondary)
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .trailing) {
+                        Button(action: showSettings) {
+                            Image(systemName: "pencil").font(.system(size: 10)).frame(width: 22, height: 22)
+                        }
+                        .buttonStyle(QuietButtonStyle()).foregroundStyle(palette.secondary)
+                        .help("Edit focus presets").accessibilityLabel("Edit focus presets")
+                    }
                 HStack(spacing: 8) {
-                    focusPreset(25)
-                    focusPreset(50)
-                    if ![25, 50].contains(model.preferences.focusMinutes) { focusPreset(model.preferences.focusMinutes) }
+                    ForEach(model.preferences.focusPresets.indices, id: \.self) { index in
+                        focusPreset(model.preferences.focusPresets[index], primary: index == 0)
+                    }
                 }
             }
             HStack(spacing: 12) {
@@ -173,7 +181,7 @@ struct TimerView: View {
             }.foregroundStyle(palette.secondary).frame(height: 20).padding(.top, 2)
         }
     }
-    private func focusPreset(_ minutes: Int) -> some View {
+    private func focusPreset(_ minutes: Int, primary: Bool) -> some View {
         Button {
             model.startFocus(minutes: minutes)
             collapse()
@@ -183,8 +191,8 @@ struct TimerView: View {
                 Text("min").font(.system(size: 10))
             }
             .frame(maxWidth: .infinity).frame(height: 34)
-            .foregroundStyle(minutes == 25 ? palette.background : palette.ink)
-            .background(minutes == 25 ? palette.ink : palette.ink.opacity(0.055), in: Capsule())
+            .foregroundStyle(primary ? palette.background : palette.ink)
+            .background(primary ? palette.ink : palette.ink.opacity(0.055), in: Capsule())
         }.buttonStyle(QuietButtonStyle()).accessibilityLabel("Start \(minutes) minute focus")
     }
     private func startBreak(_ mode: TimerMode) { model.startBreak(mode); collapse() }

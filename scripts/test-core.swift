@@ -34,7 +34,7 @@ struct StillCoreTestRunner {
         check(TimerMode.focus.title == "Focus", "focus title", failures: &failures)
         check(TimerMode.shortBreak.title == "Short Break", "short-break title", failures: &failures)
         check(TimerMode.longBreak.title == "Long Break", "long-break title", failures: &failures)
-        check(TimerMode.focus.defaultDuration == 25 * 60, "focus default duration", failures: &failures)
+        check(TimerMode.focus.defaultDuration == 30 * 60, "focus default duration", failures: &failures)
         check(TimerMode.shortBreak.defaultDuration == 5 * 60, "short-break default duration", failures: &failures)
         check(TimerMode.longBreak.defaultDuration == 15 * 60, "long-break default duration", failures: &failures)
     }

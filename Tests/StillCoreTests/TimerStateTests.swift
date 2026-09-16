@@ -12,7 +12,7 @@ final class TimerStateTests: XCTestCase {
         XCTAssertEqual(TimerMode.focus.title, "Focus")
         XCTAssertEqual(TimerMode.shortBreak.title, "Short Break")
         XCTAssertEqual(TimerMode.longBreak.title, "Long Break")
-        XCTAssertEqual(TimerMode.focus.defaultDuration, 25 * 60)
+        XCTAssertEqual(TimerMode.focus.defaultDuration, 30 * 60)
         XCTAssertEqual(TimerMode.shortBreak.defaultDuration, 5 * 60)
         XCTAssertEqual(TimerMode.longBreak.defaultDuration, 15 * 60)
     }

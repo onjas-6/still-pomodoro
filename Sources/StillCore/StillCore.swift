@@ -23,7 +23,7 @@ public enum TimerMode: String, Codable, CaseIterable, Sendable {
     public var defaultDuration: TimeInterval {
         switch self {
         case .focus:
-            return 25 * 60
+            return 30 * 60
         case .shortBreak:
             return 5 * 60
         case .longBreak:

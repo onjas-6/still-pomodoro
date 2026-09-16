@@ -10,8 +10,8 @@ A native SwiftUI + AppKit companion that sits lightly above your desktop.
 **128 × 52 points** by default. Just the countdown: clear minutes and smaller,
 softer seconds on a translucent surface. No accounts, analytics, or network requests.
 
-- **Click to expand.** Choose 25 or 50 minutes and the controls disappear again.
-  Set another default duration in Preferences to add a custom shortcut.
+- **Click to expand.** Choose 30, 45, or 60 minutes and the controls disappear again.
+  Use the pencil to edit all three shortcuts in Preferences.
 - **A little sense of time.** A fine sage progress line fills as the session elapses; it dims when paused.
 - **Gentle motion.** The panel opens around the countdown, with a soft control reveal.
   Rapid reversals stay smooth, and macOS Reduce Motion is respected.
@@ -45,9 +45,12 @@ your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewher
 
 ## Use
 
-1. Click the small countdown, then **25 min** or **50 min** to start.
+1. Click the small countdown, then **30 min**, **45 min**, or **60 min** to start.
 2. Click it again to pause, continue, reset, start a break, or open preferences.
 3. In Preferences, choose **System / Light / Dark**, timer size, and background opacity.
+   Type directly into the focus and break duration fields. **Start buttons** controls
+   the three shortcuts; press Return or leave the field to save. Focus durations accept
+   1–180 minutes. Changes apply to future sessions and preserve the active countdown.
 4. Under **Markdown journal**, enter a path and click **Save path**, or choose a file.
    Use **Open Markdown** to see the actual record in your editor.
 
