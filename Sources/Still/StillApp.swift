@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var localEventMonitor: Any?
     private var appearanceObservation: NSKeyValueObservation?
     private var pendingWindowPreferences: DispatchWorkItem?
+    private var pendingFrameSave: DispatchWorkItem?
     private var windowSelfTest = false
     private var compactSize: NSSize {
         let scale = model.preferences.compactScale
@@ -53,8 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         windowSelfTest = CommandLine.arguments.contains("--window-self-test")
-        preview = windowSelfTest || CommandLine.arguments.contains("--preview")
-        model = AppModel(preview: preview)
+        let renderSelfTest = CommandLine.arguments.contains("--render-self-test")
+        preview = windowSelfTest || renderSelfTest || CommandLine.arguments.contains("--preview")
+        let diagnosticDirectory = renderSelfTest
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("Still-RenderSelfTest-\(UUID().uuidString)") : nil
+        model = AppModel(dataDirectory: diagnosticDirectory, preview: preview)
         panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: compactSize), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Still"
         panel.identifier = NSUserInterfaceItemIdentifier("StillFloatingTimer")
@@ -79,13 +83,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         placeWindow()
         model.onWindowPreferencesChanged = { [weak self] in self?.scheduleWindowPreferences() }
         applyWindowPreferences()
-        if !windowSelfTest { setupMenuBar(); setupDismissal() }
+        if !windowSelfTest && !renderSelfTest { setupMenuBar(); setupDismissal() }
         NotificationCenter.default.addObserver(self, selector: #selector(showTimer), name: .showStill, object: nil)
         // A nil appearance follows system changes for both the native material and SwiftUI.
         appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             Task { @MainActor in self?.updateAppearance() }
         }
         panel.orderFrontRegardless()
+        if renderSelfTest {
+            Task { @MainActor in
+                exit(await RenderSelfTest.run(model: self.model, setExpanded: { self.setExpanded($0) },
+                    showSettings: { self.showSettings() }, closeSettings: { self.settingsWindow?.close() }))
+            }
+        }
         if windowSelfTest {
             Task { @MainActor in
                 let result = await WindowSelfTest.run(panel: self.panel,
@@ -228,7 +238,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if panelState.expanded {
             compactFrame.origin = NSPoint(x: panel.frame.midX - compactFrame.width / 2, y: panel.frame.maxY - compactFrame.height)
         } else { compactFrame = panel.frame }
-        saveFrame()
+        scheduleFrameSave()
+    }
+    private func scheduleFrameSave() {
+        pendingFrameSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingFrameSave = nil
+            self?.saveFrame()
+        }
+        pendingFrameSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
     private func saveFrame() {
         if !preview { UserDefaults.standard.set(NSStringFromRect(compactFrame), forKey: "compactFrame") }
@@ -237,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showTimer(); return true }
     func applicationWillTerminate(_ notification: Notification) {
         panelAnimator.cancel()
+        pendingFrameSave?.cancel()
         flushWindowPreferences()
         model.persist(); saveFrame()
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
@@ -318,6 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.title = title
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
+        window.delegate = self
         let hosting = NSHostingView(rootView: view)
         window.contentView = hosting
         window.setContentSize(hosting.fittingSize)
@@ -325,5 +346,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let theme = model.preferences.theme
         window.appearance = theme == "light" ? NSAppearance(named: .aqua) : theme == "dark" ? NSAppearance(named: .darkAqua) : nil
         return window
+    }
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window !== panel else { return }
+        // Closed utility windows must release their hosting trees. Retaining the
+        // window keeps native controls and model subscriptions updating invisibly.
+        window.contentView = nil
+        if window === settingsWindow { settingsWindow = nil }
+        if window === historyWindow { historyWindow = nil }
     }
 }

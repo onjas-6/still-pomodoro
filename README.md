@@ -133,6 +133,12 @@ Tests use temporary data. On a logged-in Mac, also run
 and expanding/collapsing against a real native window. This opens an isolated preview
 and does not change your timer, journal, or saved window position.
 
+`./build/Still.app/Contents/MacOS/Still --render-self-test` checks CPU use across
+ready, running, paused, and completed panels, plus settings closure and appearance
+changes. It uses an isolated preview model and temporary data path. Its generous
+50% CPU threshold detects sustained layout loops, not frame-rate performance;
+check actual dragging and click-to-expand on a logged-in Mac as well.
+
 To regenerate assets, run `swift scripts/generate-assets.swift`.
 
 ## Design references

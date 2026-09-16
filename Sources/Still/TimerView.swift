@@ -58,7 +58,7 @@ struct TimerView: View {
                 .opacity(reveal).allowsHitTesting(panelState.expanded && expansion > 0.95)
                 .accessibilityHidden(!panelState.expanded)
 
-                if !panelState.expanded {
+                if !panelState.expanded && expansion == 0 {
                     CompactInteraction(action: toggleExpanded, time: "\(model.remaining / 60) minutes, \(model.remaining % 60) seconds remaining")
                         .frame(width: size.width, height: size.height)
                         .help("Click for controls · drag to move")
@@ -67,15 +67,19 @@ struct TimerView: View {
             .frame(width: size.width, height: size.height)
             .overlay(alignment: .topLeading) {
                 // Keep the fixed-width controls out of the compact layout's size proposal.
-                VStack(spacing: 12) {
-                    controls
-                    InspirationView(store: model.inspiration, palette: palette)
-                }
+                // Opacity alone leaves AppKit-backed controls alive and laying out.
+                // Remove them after the closing animation, keeping the reveal intact.
+                if panelState.expanded || expansion > 0 {
+                    VStack(spacing: 12) {
+                        controls
+                        InspirationView(store: model.inspiration, palette: palette)
+                    }
                     .frame(width: 220)
                     .offset(x: (size.width - 220) / 2, y: 81 + 7 * (1 - reveal))
                     .opacity(reveal)
                     .allowsHitTesting(panelState.expanded && expansion > 0.95)
                     .accessibilityHidden(!panelState.expanded)
+                }
             }
             .background {
                 SoftSurface(palette: palette,
@@ -255,7 +259,7 @@ private struct QuietProgress: View {
                     .frame(width: geometry.size.width * min(1, max(0, progress)))
             }
             .opacity(paused ? 0.4 : 0.8)
-            .animation(reduceMotion || paused ? nil : .linear(duration: 0.25), value: progress)
+            .animation(reduceMotion || paused ? nil : .linear(duration: 1), value: progress)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Session progress")
@@ -308,7 +312,7 @@ struct CompactInteraction: NSViewRepresentable {
 final class CompactHitView: NSView {
     var action: (() -> Void)?
     private var initialPoint = NSPoint.zero
-    private var initialFrame = NSRect.zero
+    private var mouseDownEvent: NSEvent?
     private var dragged = false
     override var mouseDownCanMoveWindow: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -320,17 +324,27 @@ final class CompactHitView: NSView {
     required init?(coder: NSCoder) { super.init(coder: coder) }
     override func accessibilityPerformPress() -> Bool { action?(); return true }
     override func mouseDown(with event: NSEvent) {
-        initialPoint = NSEvent.mouseLocation
-        initialFrame = window?.frame ?? .zero
+        // Event coordinates stay consistent even when queued input is delivered
+        // after the physical pointer has moved on.
+        initialPoint = event.locationInWindow
+        mouseDownEvent = event
         dragged = false
     }
     override func mouseDragged(with event: NSEvent) {
-        let current = NSEvent.mouseLocation
+        guard !dragged, let mouseDownEvent else { return }
+        let current = event.locationInWindow
         let dx = current.x - initialPoint.x, dy = current.y - initialPoint.y
-        if hypot(dx, dy) > 3 { dragged = true }
-        if dragged { window?.setFrameOrigin(NSPoint(x: initialFrame.minX + dx, y: initialFrame.minY + dy)) }
+        guard hypot(dx, dy) > 3 else { return }
+        dragged = true
+        self.mouseDownEvent = nil
+        // Hand movement to WindowServer instead of setting the frame on each
+        // mouse event. A native drag may consume mouseUp, so reset on mouseDown.
+        window?.performDrag(with: mouseDownEvent)
     }
-    override func mouseUp(with event: NSEvent) { if !dragged { action?() } }
+    override func mouseUp(with event: NSEvent) {
+        mouseDownEvent = nil
+        if !dragged { action?() }
+    }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 49 || event.keyCode == 36 { action?() }
         else { super.keyDown(with: event) }

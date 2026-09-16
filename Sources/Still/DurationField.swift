@@ -25,7 +25,8 @@ struct DurationField: NSViewRepresentable {
 
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
-        if field.currentEditor() == nil { field.stringValue = String(value) }
+        let text = String(value)
+        if field.currentEditor() == nil && field.stringValue != text { field.stringValue = text }
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {

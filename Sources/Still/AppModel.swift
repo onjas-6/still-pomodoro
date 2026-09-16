@@ -70,7 +70,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         if let session = timer.tick(at: now) { add(session) }
         if restoringRunningTimer && timer.phase == .completed { persist() }
         pulse = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect().sink { [weak self] date in
-            self?.advance(to: date)
+            self?.refreshClock(to: date)
         }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
         if !preview {
@@ -166,10 +166,24 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     func advance(to date: Date) {
         now = date
         let wasRunning = timer.phase == .running
-        if let session = timer.tick(at: date) { add(session); persist(); synchronizeJournal() }
+        // Calling a mutating method through @Published also publishes no-op ticks.
+        // Work on a value copy, publishing only a real phase transition.
+        var updated = timer
+        let session = updated.tick(at: date)
+        if updated.phase != timer.phase || session != nil { timer = updated }
+        if let session { add(session); persist(); synchronizeJournal() }
         if wasRunning && timer.phase == .completed {
             persist()
             if preferences.soundEnabled && !systemChimeScheduled { playChime() }
+        }
+    }
+    func refreshClock(to date: Date) {
+        // Keep the 250 ms deadline check, but invalidate the UI only when a shown
+        // second changes. Paused/ready/completed clocks only refresh at midnight.
+        let displayed = max(0, Int(ceil(timer.remaining(at: date))))
+        if (timer.phase == .running && displayed != remaining)
+            || !Calendar.current.isDate(date, inSameDayAs: now) {
+            advance(to: date)
         }
     }
     @objc private func woke() { advance(to: Date()) }
