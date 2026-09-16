@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.identifier = NSUserInterfaceItemIdentifier("StillFloatingTimer")
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = model.preferences.edgeStyle != "diffuse"
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
@@ -197,6 +197,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         applyWindowPreferences()
     }
     private func applyWindowPreferences() {
+        let castsShadow = model.preferences.edgeStyle != "diffuse"
+        if panel.hasShadow != castsShadow {
+            panel.hasShadow = castsShadow
+            panel.invalidateShadow()
+        }
         let level: NSWindow.Level = model.preferences.floatOnTop ? .floating : .normal
         if panel.level != level { panel.level = level }
         let oldSize = compactFrame.size

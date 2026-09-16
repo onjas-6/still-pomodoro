@@ -27,6 +27,7 @@ enum AppModelSelfTest {
             testCorruptArchiveIsPreserved(in: root.appendingPathComponent("corrupt", isDirectory: true), recorder: &recorder)
             testFocusPresetDoesNotRestart(in: root.appendingPathComponent("preset", isDirectory: true), recorder: &recorder)
             testFocusPresetPreferences(in: root.appendingPathComponent("preset-preferences", isDirectory: true), recorder: &recorder)
+            testAppearancePreferences(in: root.appendingPathComponent("appearance-preferences", isDirectory: true), recorder: &recorder)
             testJournalPathAppendAndRestore(in: root.appendingPathComponent("journal", isDirectory: true), recorder: &recorder)
             testLegacyPreferencesDecode(in: root.appendingPathComponent("legacy", isDirectory: true), recorder: &recorder)
             testBackgroundJournalImportAndCompletion(in: root.appendingPathComponent("journal-worker", isDirectory: true), recorder: &recorder)
@@ -36,7 +37,7 @@ enum AppModelSelfTest {
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 13 test groups")
+            print("AppModel self-test passed: 14 test groups")
             return 0
         }
 
@@ -308,6 +309,51 @@ enum AppModelSelfTest {
         recorder.check(restored.preferences.focusPresets == [40, 40, 120], "preset preferences: saved slots restore in order with duplicates")
     }
 
+    private static func testAppearancePreferences(in directory: URL, recorder: inout Recorder) {
+        let defaults = Preferences()
+        recorder.check(defaults.colorTheme == "sage", "appearance preferences: default color theme is sage")
+        recorder.check(defaults.edgeStyle == "glass", "appearance preferences: default edge style is glass")
+
+        var normalized = Preferences(colorTheme: "OCEAN", edgeStyle: "DIFFUSE")
+        recorder.check(normalized.colorTheme == "ocean", "appearance preferences: initializer lowercases color theme")
+        recorder.check(normalized.edgeStyle == "diffuse", "appearance preferences: initializer lowercases edge style")
+        normalized.colorTheme = "unknown"
+        normalized.edgeStyle = "blurred"
+        normalized.sanitize()
+        recorder.check(normalized.colorTheme == "sage", "appearance preferences: invalid color theme falls back to sage")
+        recorder.check(normalized.edgeStyle == "glass", "appearance preferences: invalid edge style falls back to glass")
+
+        let colorThemes = ["sage", "ocean", "lavender", "rose", "sand", "clay", "graphite", "mint"]
+        for colorTheme in colorThemes {
+            do {
+                let encoded = try JSONEncoder().encode(Preferences(colorTheme: colorTheme))
+                let decoded = try JSONDecoder().decode(Preferences.self, from: encoded)
+                recorder.check(decoded.colorTheme == colorTheme, "appearance preferences: \(colorTheme) survives a round trip")
+            } catch {
+                recorder.fail("appearance preferences: \(colorTheme) round trip failed: \(error)")
+            }
+        }
+
+        let model = AppModel(dataDirectory: directory.appendingPathComponent("persistence", isDirectory: true))
+        prepareForTimerUse(model, focusMinutes: 37)
+        model.preferences.edgeStyle = "DIFFUSE"
+        model.startFocus(minutes: 37)
+        guard let deadline = model.timer.deadline, let sessionID = model.timer.sessionID else {
+            recorder.fail("appearance preferences: focus timer did not start")
+            return
+        }
+        model.savePreferences()
+        recorder.check(model.timer.deadline == deadline, "appearance preferences: saving preserves a running deadline")
+        recorder.check(model.timer.sessionID == sessionID, "appearance preferences: saving preserves a running session identity")
+
+        let restored = AppModel(dataDirectory: directory.appendingPathComponent("persistence", isDirectory: true))
+        recorder.check(restored.preferences.edgeStyle == "diffuse", "appearance preferences: diffuse edge style restores")
+        // Recovery archives store ISO-8601 timestamps at whole-second precision.
+        let archivedDeadline = Date(timeIntervalSince1970: floor(deadline.timeIntervalSince1970))
+        recorder.check(restored.timer.deadline == archivedDeadline, "appearance preferences: persisted timer deadline restores")
+        recorder.check(restored.timer.sessionID == sessionID, "appearance preferences: persisted timer session identity restores")
+    }
+
     private static func testJournalPathAppendAndRestore(in directory: URL, recorder: inout Recorder) {
         let stateDirectory = directory.appendingPathComponent("state", isDirectory: true)
         let journalURL = directory.appendingPathComponent("sessions.md")
@@ -362,6 +408,8 @@ enum AppModelSelfTest {
             recorder.check(preferences.shortBreakMinutes == 7, "legacy preferences: short-break duration is retained")
             recorder.check(preferences.longBreakMinutes == 21, "legacy preferences: long-break duration is retained")
             recorder.check(preferences.theme == "system", "legacy preferences: v1 theme maps to system")
+            recorder.check(preferences.colorTheme == "sage", "legacy preferences: missing color theme defaults to sage")
+            recorder.check(preferences.edgeStyle == "glass", "legacy preferences: missing edge style defaults to glass")
             recorder.check(preferences.compactScale == 1, "legacy preferences: missing compact scale defaults")
             recorder.check(preferences.backgroundOpacity == 0.5, "legacy preferences: missing opacity defaults")
             recorder.check(preferences.journalPath.isEmpty, "legacy preferences: missing journal path defaults empty")

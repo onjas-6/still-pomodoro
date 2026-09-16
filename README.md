@@ -20,6 +20,11 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
 - **Adjustable.** Scale the compact timer from 80% to 300% (up to 384 × 156 points)
   and change background opacity in Preferences.
 - **Follows your Mac.** System light/dark mode by default, with manual overrides.
+- **Choose your atmosphere.** Eight coordinated palettes: Sage, Ocean, Lavender,
+  Rose, Sand, Clay, Graphite, and Mint, each with light and dark versions.
+- **Soften the edge.** Switch between frosted **Glass** and **Diffuse**, a translucent
+  color wash that fades into the desktop. Digits stay sharp; Diffuse removes the native
+  window shadow. Reduce Transparency uses a solid surface for readability.
 - **Your sessions, in Markdown.** Pick an existing `.md` file or a new path. Still
   appends completed focus sessions, preserving your notes and avoiding duplicates.
 - **Gentle endings.** Local notifications and an original soft two-note chime.
@@ -49,6 +54,8 @@ your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewher
 1. Click the small countdown, then **30 min**, **45 min**, or **60 min** to start.
 2. Click it again to pause, continue, reset, start a break, or open preferences.
 3. In Preferences, choose **System / Light / Dark**, timer size, and background opacity.
+   **Theme color** changes the surface, digits, controls, and progress together;
+   **Edges → Diffuse** removes the defined outline. Changes preview immediately.
    Type directly into the focus and break duration fields. **Start buttons** controls
    the three shortcuts; press Return or leave the field to save. Focus durations accept
    1–180 minutes. Changes apply to future sessions and preserve the active countdown.

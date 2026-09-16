@@ -7,7 +7,7 @@ struct PreferencesView: View {
     @ObservedObject var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @StoredViewState private var journalPathDraft = ""
-    private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme) }
+    private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme, colorTheme: model.preferences.colorTheme) }
 
     var body: some View {
         ScrollView {
@@ -46,6 +46,8 @@ struct PreferencesView: View {
                     Text("Dark").tag("dark")
                 }
                 .pickerStyle(.segmented)
+
+                AppearanceOptions(model: model, palette: palette)
 
                 sliderRow("Collapsed timer size", value: $model.preferences.compactScale, range: Preferences.compactScaleRange, display: "\(Int((model.preferences.compactScale * 100).rounded()))%")
                 sliderRow("Background opacity", value: $model.preferences.backgroundOpacity, range: 0.15...0.9, display: "\(Int(model.preferences.backgroundOpacity * 100))%")
@@ -116,6 +118,8 @@ struct PreferencesView: View {
         .onChange(of: model.preferences.shortBreakMinutes) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.longBreakMinutes) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.theme) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.colorTheme) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.edgeStyle) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.compactScale) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.backgroundOpacity) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.floatOnTop) { _, _ in model.savePreferences() }
@@ -182,7 +186,7 @@ struct HistoryView: View {
     @ObservedObject var model: AppModel
     @StoredViewState private var exportError: String? = nil
     @Environment(\.colorScheme) private var colorScheme
-    private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme) }
+    private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme, colorTheme: model.preferences.colorTheme) }
     private var days: [Date] { (0..<7).reversed().compactMap { Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: model.now)) } }
     private func count(_ day: Date) -> Int { model.sessions.filter { Calendar.current.isDate($0.completedAt, inSameDayAs: day) }.count }
     var body: some View {

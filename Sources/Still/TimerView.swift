@@ -5,21 +5,6 @@ import StillCore
 // Explicitly select the property wrapper on CLT SDKs without SwiftUI macro plugins.
 typealias StoredViewState<Value> = SwiftUI.State<Value>
 
-struct Palette {
-    let background: Color
-    let ink: Color
-    let secondary: Color
-    let accent: Color
-    let wash: Color
-    let progress: Color
-    static func resolved(theme: String, scheme: ColorScheme) -> Palette {
-        let dark = theme == "dark" || (theme != "light" && scheme == .dark)
-        if dark {
-            return Palette(background: Color(hex: 0x242A27), ink: Color(hex: 0xF0F1E9), secondary: Color(hex: 0xA1AEA5), accent: Color(hex: 0xC6B184), wash: Color(hex: 0x46544B), progress: Color(hex: 0xB7CCAD))
-        }
-        return Palette(background: Color(hex: 0xF5F4EF), ink: Color(hex: 0x34483D), secondary: Color(hex: 0x7A877E), accent: Color(hex: 0x9B8356), wash: Color(hex: 0xE1E7DC), progress: Color(hex: 0x738D72))
-    }
-}
 extension Color {
     init(hex: UInt32) { self.init(.sRGB, red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255, opacity: 1) }
 }
@@ -39,7 +24,7 @@ struct TimerView: View {
     var showSettings: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @StoredViewState private var hovering = false
-    private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme) }
+    private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme, colorTheme: model.preferences.colorTheme) }
     private var expansion: CGFloat { panelState.expansion }
     private var hasProgress: Bool { model.timer.phase != .ready }
     private func blend(_ compact: CGFloat, _ expanded: CGFloat) -> CGFloat { compact + (expanded - compact) * expansion }
@@ -97,7 +82,8 @@ struct TimerView: View {
                             opacity: Double(blend(model.preferences.backgroundOpacity, 0.94)),
                             expansion: expansion,
                             cornerRadius: blend(22 * scale, 26),
-                            hovering: hovering)
+                            hovering: hovering,
+                            diffuse: model.preferences.edgeStyle == "diffuse")
             }
         }
         .onHover { hovering = $0 }
@@ -204,28 +190,55 @@ private struct SoftSurface: View {
     let expansion: CGFloat
     let cornerRadius: CGFloat
     let hovering: Bool
+    let diffuse: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        ZStack {
-            if reduceTransparency { palette.background }
-            else {
-                GlassBackground(opacity: opacity)
-                LinearGradient(colors: [palette.background.opacity(0.12 + 0.43 * expansion),
-                                        palette.background.opacity(0.05 + 0.42 * expansion)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
+        Group {
+            if diffuse && !reduceTransparency {
+                // A translucent color wash fades entirely before the window edge.
+                // Only the surface is masked; text and controls remain crisp.
+                ZStack {
+                    palette.background
+                    LinearGradient(colors: [palette.wash.opacity(0.40), palette.background.opacity(0.10)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                }
+                .opacity(opacity)
+                .mask {
+                    GeometryReader { geometry in
+                        let feather = min(14, geometry.size.height * 0.12) * (1 - expansion) + 7 * expansion
+                        RoundedRectangle(cornerRadius: max(8, cornerRadius - feather), style: .continuous)
+                            .fill(.white).padding(feather * 0.85).blur(radius: feather)
+                            .mask(LinearGradient(stops: edgeStops, startPoint: .top, endPoint: .bottom))
+                            .mask(LinearGradient(stops: edgeStops, startPoint: .leading, endPoint: .trailing))
+                    }
+                }
+            } else {
+                let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                ZStack {
+                    if reduceTransparency { palette.background }
+                    else {
+                        GlassBackground(opacity: opacity)
+                        LinearGradient(colors: [palette.wash.opacity(0.30 + 0.35 * expansion),
+                                                palette.background.opacity(0.16 + 0.36 * expansion)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
+                    }
+                }
+                .clipShape(shape)
+                .overlay(shape.inset(by: 0.5).stroke(
+                    LinearGradient(colors: [.white.opacity(colorScheme == .dark ? 0.13 : (hovering ? 0.48 : 0.34)),
+                                            palette.ink.opacity(0.025)], startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
+                    .blur(radius: 0.35))
+                .mask(shape.fill(.white).blur(radius: 0.35))
             }
         }
-        .clipShape(shape)
-        // A feathered highlight defines the edge without a dark, hard outline.
-        .overlay(shape.inset(by: 0.5).stroke(
-            LinearGradient(colors: [.white.opacity(colorScheme == .dark ? 0.13 : (hovering ? 0.48 : 0.34)),
-                                    palette.ink.opacity(0.025)], startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
-            .blur(radius: 0.35))
-        .mask(shape.fill(.white).blur(radius: 0.35))
         .allowsHitTesting(false)
+    }
+
+    private var edgeStops: [Gradient.Stop] {
+        [.init(color: .clear, location: 0), .init(color: .white, location: 0.045),
+         .init(color: .white, location: 0.955), .init(color: .clear, location: 1)]
     }
 }
 
