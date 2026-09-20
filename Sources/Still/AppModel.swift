@@ -217,7 +217,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         refreshRestReminder(to: date)
     }
     func snoozeRestReminder(at date: Date = Date()) {
-        restSnoozedUntil = date.addingTimeInterval(10 * 60)
+        restSnoozedUntil = date.addingTimeInterval(5 * 60)
         refreshRestReminder(to: date)
     }
     private func refreshRestReminder(to date: Date) {
