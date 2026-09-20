@@ -28,6 +28,10 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
 - **Your sessions, in Markdown.** Pick an existing `.md` file or a new path. Still
   appends completed focus sessions, preserving your notes and avoiding duplicates.
 - **Gentle endings.** Local notifications and an original soft two-note chime.
+- **Rest hours.** Set a daily stop-work window (00:00–08:00 by default). A visible,
+  softly pulsing reminder returns after a 10-minute delay, even if the timer is hidden.
+  You can write your own short message. A daily start notification is available when
+  macOS notifications are allowed.
 - **A little perspective.** An expanded-only thought, with a quiet button for the next one.
   Edit your own local collection; thoughts stay still until you choose another.
 - **Reliable timing.** Pause/resume, sleep/wake, and relaunch use absolute deadlines.
@@ -63,6 +67,10 @@ your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewher
    1–180 minutes. Changes apply to future sessions and preserve the active countdown.
 4. Under **Markdown journal**, enter a path and click **Save path**, or choose a file.
    Use **Open Markdown** to see the actual record in your editor.
+5. Under **Rest hours**, choose when to stop and resume, and edit the reminder text.
+   Times use your Mac's local clock; windows can cross midnight. The reminder remains
+   visible while Still is running and the Mac is awake. **10 分钟后再提醒** delays it
+   for 10 minutes. Turning off **Remind me to stop working** disables the schedule.
 
 After quitting Still, you can also set the path from a terminal:
 `/Applications/Still.app/Contents/MacOS/Still --journal /path/to/focus-sessions.md`.

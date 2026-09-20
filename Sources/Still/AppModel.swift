@@ -31,6 +31,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @Published private(set) var sessions: [FocusSession] = []
     @Published var preferences = Preferences()
     @Published private(set) var now = Date()
+    @Published private(set) var restReminderActive = false
     @Published var storageError: String?
     @Published var notificationStatus = "Not requested"
     @Published var journalError: String?
@@ -41,6 +42,8 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private var notificationGeneration = 0
     private var hasNotificationPermission = false
     private var systemChimeScheduled = false
+    private var restSnoozedUntil: Date?
+    private var lastRestCheckSecond: Int?
     private var canSave = true
     private var journalPathIntent = 0
     private var pendingJournalPath: String?
@@ -50,10 +53,12 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private var journalPathWaiters: [Int: CheckedContinuation<Bool, Never>] = [:]
     let dataURL: URL
     let isPreview: Bool
+    private let managesSystemNotifications: Bool
     let inspiration: InspirationStore
 
     init(dataDirectory: URL? = nil, preview: Bool = false, syncJournalOnLaunch: Bool = true) {
         isPreview = preview
+        managesSystemNotifications = !preview && dataDirectory == nil
         dataURL = (dataDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Still", isDirectory: true)).appendingPathComponent("state.json")
         inspiration = InspirationStore(directory: dataURL.deletingLastPathComponent(), preview: preview)
@@ -69,16 +74,29 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         let restoringRunningTimer = timer.phase == .running
         if let session = timer.tick(at: now) { add(session) }
         if restoringRunningTimer && timer.phase == .completed { persist() }
+        refreshRestReminder(to: now)
         pulse = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect().sink { [weak self] date in
             self?.refreshClock(to: date)
         }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
+        if managesSystemNotifications {
+            // Older releases used one-off timer IDs. Remove only those legacy requests;
+            // the new daily rest reminder has its own stable identifier.
+            let center = UNUserNotificationCenter.current()
+            center.getPendingNotificationRequests { requests in
+                let legacy = requests.map(\.identifier).filter { $0.hasPrefix("still.timer.") }
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: legacy)
+            }
+        }
         if !preview {
             // The existence check and any Markdown I/O run on the journal worker. A
             // newly generated default path with no sessions is intentionally untouched.
             if syncJournalOnLaunch && (!sessions.isEmpty || hadStoredJournalPath) { synchronizeJournal() }
-            Task { await refreshNotificationStatus() }
-            if timer.phase == .running { syncNotification(requestPermission: false) }
+            if managesSystemNotifications {
+                Task { await refreshNotificationStatus() }
+                if timer.phase == .running { syncNotification(requestPermission: false) }
+                syncRestNotification()
+            }
         }
     }
 
@@ -162,6 +180,8 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         persist()
         onWindowPreferencesChanged?()
         syncNotification(requestPermission: false)
+        refreshRestReminder(to: Date())
+        syncRestNotification()
     }
     func advance(to date: Date) {
         now = date
@@ -178,6 +198,11 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         }
     }
     func refreshClock(to date: Date) {
+        let second = Int(date.timeIntervalSince1970)
+        if lastRestCheckSecond != second {
+            lastRestCheckSecond = second
+            refreshRestReminder(to: date)
+        }
         // Keep the 250 ms deadline check, but invalidate the UI only when a shown
         // second changes. Paused/ready/completed clocks only refresh at midnight.
         let displayed = max(0, Int(ceil(timer.remaining(at: date))))
@@ -186,7 +211,22 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             advance(to: date)
         }
     }
-    @objc private func woke() { advance(to: Date()) }
+    @objc private func woke() {
+        let date = Date()
+        advance(to: date)
+        refreshRestReminder(to: date)
+    }
+    func snoozeRestReminder(at date: Date = Date()) {
+        restSnoozedUntil = date.addingTimeInterval(10 * 60)
+        refreshRestReminder(to: date)
+    }
+    private func refreshRestReminder(to date: Date) {
+        let inWindow = preferences.restReminderEnabled && RestSchedule.contains(
+            date, startMinute: preferences.restStartMinute, endMinute: preferences.restEndMinute)
+        let shouldShow = inWindow && (restSnoozedUntil.map { date >= $0 } ?? true)
+        if restReminderActive != shouldShow { restReminderActive = shouldShow }
+        if !inWindow { restSnoozedUntil = nil }
+    }
     private func add(_ session: FocusSession) {
         if !sessions.contains(where: { $0.id == session.id }) {
             sessions.append(session)
@@ -413,6 +453,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             catch { notificationStatus = "Unavailable: \(error.localizedDescription)" }
             await refreshNotificationStatus()
             syncNotification(requestPermission: false)
+            syncRestNotification()
         }
     }
     func openNotificationSettings() {
@@ -429,12 +470,12 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         }
     }
     private func syncNotification(requestPermission: Bool) {
-        guard !isPreview else { return }
+        guard managesSystemNotifications else { return }
         systemChimeScheduled = false
         notificationGeneration += 1
         let generation = notificationGeneration
         let center = UNUserNotificationCenter.current()
-        center.removeAllPendingNotificationRequests()
+        center.removePendingNotificationRequests(withIdentifiers: ["still.timer"])
         guard preferences.notificationsEnabled, timer.phase == .running, let deadline = timer.deadline else { return }
         let mode = timer.mode
         let soundEnabled = preferences.soundEnabled
@@ -449,13 +490,35 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             content.title = mode == .focus ? "A moment, well spent." : "Ready for a fresh start?"
             content.body = mode == .focus ? "Your focus session is complete. Take a slow breath and a little break." : "Your break is over. Come back to one thing that matters."
             if soundEnabled { content.sound = UNNotificationSound(named: UNNotificationSoundName("StillChime.aiff")) }
-            let id = "still.timer.\(generation).\(UUID().uuidString)"
+            let id = "still.timer"
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, deadline.timeIntervalSinceNow), repeats: false)
             do {
                 try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
                 if generation != notificationGeneration { center.removePendingNotificationRequests(withIdentifiers: [id]) }
                 else { systemChimeScheduled = soundEnabled }
             } catch { notificationStatus = "Could not schedule: \(error.localizedDescription)" }
+        }
+    }
+    private func syncRestNotification() {
+        guard managesSystemNotifications else { return }
+        let center = UNUserNotificationCenter.current()
+        let id = "still.rest.start"
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        guard preferences.restReminderEnabled,
+              preferences.restStartMinute != preferences.restEndMinute else { return }
+        let minute = preferences.restStartMinute
+        let message = preferences.restMessage
+        Task {
+            await refreshNotificationStatus()
+            guard hasNotificationPermission, preferences.restReminderEnabled,
+                  preferences.restStartMinute == minute else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Time to rest"
+            content.body = message
+            let components = DateComponents(hour: minute / 60, minute: minute % 60)
+            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+            do { try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger)) }
+            catch { notificationStatus = "Could not schedule: \(error.localizedDescription)" }
         }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {

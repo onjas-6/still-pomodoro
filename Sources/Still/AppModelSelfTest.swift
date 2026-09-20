@@ -34,12 +34,13 @@ enum AppModelSelfTest {
             testBackgroundJournalImportAndCompletion(in: root.appendingPathComponent("journal-worker", isDirectory: true), recorder: &recorder)
             testLocalInspiration(in: root.appendingPathComponent("inspiration", isDirectory: true), recorder: &recorder)
             testQuietClock(in: root.appendingPathComponent("quiet-clock", isDirectory: true), recorder: &recorder)
+            testRestReminder(in: root.appendingPathComponent("rest-reminder", isDirectory: true), recorder: &recorder)
         } catch {
             recorder.fail("Unable to create self-test workspace: \(error)")
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 15 test groups")
+            print("AppModel self-test passed: 16 test groups")
             return 0
         }
 
@@ -48,6 +49,46 @@ enum AppModelSelfTest {
             print("FAIL: \(failure)")
         }
         return 1
+    }
+
+    private static func testRestReminder(in directory: URL, recorder: inout Recorder) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        func date(_ day: Int, _ hour: Int, _ minute: Int) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 9, day: day, hour: hour, minute: minute))!
+        }
+        recorder.check(!RestSchedule.contains(date(18, 21, 59), startMinute: 22 * 60, endMinute: 7 * 60, calendar: calendar),
+                       "rest window: inactive before an overnight start")
+        recorder.check(RestSchedule.contains(date(18, 22, 0), startMinute: 22 * 60, endMinute: 7 * 60, calendar: calendar),
+                       "rest window: active at start")
+        recorder.check(RestSchedule.contains(date(19, 0, 0), startMinute: 22 * 60, endMinute: 7 * 60, calendar: calendar),
+                       "rest window: active across midnight")
+        recorder.check(!RestSchedule.contains(date(19, 7, 0), startMinute: 22 * 60, endMinute: 7 * 60, calendar: calendar),
+                       "rest window: inactive at end")
+        recorder.check(!RestSchedule.contains(date(19, 0, 0), startMinute: 0, endMinute: 0, calendar: calendar),
+                       "rest window: matching start and end do not create an all-day alert")
+
+        let model = AppModel(dataDirectory: directory, preview: true)
+        model.preferences.restStartMinute = 22 * 60
+        model.preferences.restEndMinute = 7 * 60
+        model.refreshClock(to: date(18, 23, 30))
+        recorder.check(model.restReminderActive, "rest reminder: appears inside the configured window")
+        model.snoozeRestReminder(at: date(18, 23, 30))
+        recorder.check(!model.restReminderActive, "rest reminder: snooze hides the panel")
+        model.refreshClock(to: date(18, 23, 39))
+        recorder.check(!model.restReminderActive, "rest reminder: stays hidden before snooze ends")
+        model.refreshClock(to: date(18, 23, 40))
+        recorder.check(model.restReminderActive, "rest reminder: returns when snooze ends")
+        model.refreshClock(to: date(19, 7, 0))
+        recorder.check(!model.restReminderActive, "rest reminder: clears at the end of the window")
+
+        do {
+            let preferences = Preferences(restReminderEnabled: true, restStartMinute: 23 * 60 + 15,
+                                          restEndMinute: 6 * 60 + 45, restMessage: "Rest tonight.")
+            let restored = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences))
+            recorder.check(restored.restStartMinute == 23 * 60 + 15 && restored.restEndMinute == 6 * 60 + 45
+                           && restored.restMessage == "Rest tonight.", "rest reminder: settings round trip")
+        } catch { recorder.fail("rest reminder: settings round trip failed: \(error)") }
     }
 
     private static func testQuietClock(in directory: URL, recorder: inout Recorder) {

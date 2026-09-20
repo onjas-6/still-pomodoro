@@ -7,6 +7,7 @@ struct PreferencesView: View {
     @ObservedObject var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @StoredViewState private var journalPathDraft = ""
+    @StoredViewState private var restMessageDraft = ""
     private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme, colorTheme: model.preferences.colorTheme) }
 
     var body: some View {
@@ -71,6 +72,27 @@ struct PreferencesView: View {
                 }
             }
 
+            section("REST HOURS") {
+                Toggle("Remind me to stop working", isOn: $model.preferences.restReminderEnabled)
+                HStack(spacing: 12) {
+                    DatePicker("From", selection: restTimeBinding(\.restStartMinute), displayedComponents: .hourAndMinute)
+                    DatePicker("Until", selection: restTimeBinding(\.restEndMinute), displayedComponents: .hourAndMinute)
+                }
+                .datePickerStyle(.field)
+                HStack {
+                    TextField("Reminder message", text: $restMessageDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(saveRestMessage)
+                    Button("Save", action: saveRestMessage).buttonStyle(.link)
+                }
+                Text("Use up to 60 characters. The reminder stays on screen and gently flashes during these hours. You can delay it for 10 minutes. A daily notification is sent at the start when allowed.")
+                    .font(.system(size: 10)).foregroundStyle(palette.secondary)
+                if model.preferences.restStartMinute == model.preferences.restEndMinute {
+                    Text("Choose different start and end times.")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                }
+            }
+
             section("MARKDOWN JOURNAL") {
                 TextField("Journal path", text: $journalPathDraft)
                     .textFieldStyle(.roundedBorder)
@@ -111,7 +133,10 @@ struct PreferencesView: View {
         .frame(width: 440, height: min(790, (NSScreen.main?.visibleFrame.height ?? 900) - 80))
         .background(palette.background).foregroundStyle(palette.ink)
         .preferredColorScheme(model.preferences.preferredColorScheme())
-        .onAppear { journalPathDraft = model.preferences.journalPath }
+        .onAppear {
+            journalPathDraft = model.preferences.journalPath
+            restMessageDraft = model.preferences.restMessage
+        }
         .onChange(of: model.preferences.journalPath) { _, path in journalPathDraft = path }
         .onChange(of: model.preferences.focusMinutes) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.focusPresets) { _, _ in model.savePreferences() }
@@ -125,6 +150,7 @@ struct PreferencesView: View {
         .onChange(of: model.preferences.floatOnTop) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.soundEnabled) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.notificationsEnabled) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.restReminderEnabled) { _, _ in model.savePreferences() }
     }
 
     private func label(_ text: String) -> some View {
@@ -147,6 +173,21 @@ struct PreferencesView: View {
     }
     private func presetBinding(_ index: Int) -> Binding<Int> {
         Binding(get: { model.preferences.focusPresets[index] }, set: { model.preferences.focusPresets[index] = $0 })
+    }
+    private func restTimeBinding(_ keyPath: WritableKeyPath<Preferences, Int>) -> Binding<Date> {
+        Binding(
+            get: { Calendar.current.startOfDay(for: Date()).addingTimeInterval(Double(model.preferences[keyPath: keyPath] * 60)) },
+            set: { date in
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+                model.preferences[keyPath: keyPath] = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+                model.savePreferences()
+            }
+        )
+    }
+    private func saveRestMessage() {
+        model.preferences.restMessage = restMessageDraft
+        model.savePreferences()
+        restMessageDraft = model.preferences.restMessage
     }
     private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, display: String) -> some View {
         HStack(spacing: 12) {

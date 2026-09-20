@@ -1,5 +1,6 @@
 // Created 2026-09-15 · gpt-6-astra · Codex
 import AppKit
+import Combine
 import SwiftUI
 
 @main
@@ -35,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var statusItem: NSStatusItem!
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var restWindow: FloatingPanel?
+    private var restObservation: AnyCancellable?
     private var menu: NSMenu!
     private var preview = false
     private var compactFrame = NSRect.zero
@@ -83,6 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         placeWindow()
         model.onWindowPreferencesChanged = { [weak self] in self?.scheduleWindowPreferences() }
         applyWindowPreferences()
+        if !preview {
+            restObservation = model.$restReminderActive.removeDuplicates().sink { [weak self] active in
+                self?.showRestReminder(active)
+            }
+        }
         if !windowSelfTest && !renderSelfTest { setupMenuBar(); setupDismissal() }
         NotificationCenter.default.addObserver(self, selector: #selector(showTimer), name: .showStill, object: nil)
         // A nil appearance follows system changes for both the native material and SwiftUI.
@@ -232,6 +240,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if window.appearance?.name != appearance?.name { window.appearance = appearance }
             if window !== panel { window.backgroundColor = .windowBackgroundColor }
         }
+    }
+    private func showRestReminder(_ active: Bool) {
+        guard active else {
+            restWindow?.orderOut(nil)
+            restWindow?.contentView = nil
+            restWindow = nil
+            return
+        }
+        if restWindow == nil {
+            let window = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 170),
+                                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.title = "Still — Time to rest"
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = false
+            window.hidesOnDeactivate = false
+            window.isMovableByWindowBackground = true
+            window.isReleasedWhenClosed = false
+            window.level = .floating
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            let hosting = NSHostingView(rootView: RestReminderView(model: model))
+            hosting.sizingOptions = []
+            window.contentView = hosting
+            restWindow = window
+        }
+        guard let restWindow else { return }
+        let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        restWindow.setFrameOrigin(NSPoint(x: visible.midX - restWindow.frame.width / 2,
+                                          y: visible.maxY - restWindow.frame.height - 28))
+        restWindow.orderFrontRegardless()
     }
     func windowDidMove(_ notification: Notification) {
         guard !changingFrame, !panelAnimator.isAnimating, notification.object as? NSWindow === panel else { return }

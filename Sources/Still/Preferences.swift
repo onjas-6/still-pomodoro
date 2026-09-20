@@ -19,6 +19,10 @@ struct Preferences: Codable {
     var compactScale: Double
     var backgroundOpacity: Double
     var journalPath: String
+    var restReminderEnabled: Bool
+    var restStartMinute: Int
+    var restEndMinute: Int
+    var restMessage: String
 
     init(
         focusMinutes: Int = 30,
@@ -33,7 +37,11 @@ struct Preferences: Codable {
         edgeStyle: String = "glass",
         compactScale: Double = 1,
         backgroundOpacity: Double = 0.5,
-        journalPath: String = ""
+        journalPath: String = "",
+        restReminderEnabled: Bool = true,
+        restStartMinute: Int = 0,
+        restEndMinute: Int = 8 * 60,
+        restMessage: String = "我是高执行力、高精力的人。现在休息，明天更清醒地行动。"
     ) {
         self.focusMinutes = Self.clamp(focusMinutes, to: 1...180)
         self.focusPresets = Self.normalizedFocusPresets(focusPresets)
@@ -48,6 +56,10 @@ struct Preferences: Codable {
         self.compactScale = Self.clamp(compactScale, to: Self.compactScaleRange)
         self.backgroundOpacity = Self.clamp(backgroundOpacity, to: 0.15...0.9)
         self.journalPath = journalPath
+        self.restReminderEnabled = restReminderEnabled
+        self.restStartMinute = Self.clamp(restStartMinute, to: 0...1439)
+        self.restEndMinute = Self.clamp(restEndMinute, to: 0...1439)
+        self.restMessage = Self.normalizedRestMessage(restMessage)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -64,6 +76,10 @@ struct Preferences: Codable {
         case compactScale
         case backgroundOpacity
         case journalPath
+        case restReminderEnabled
+        case restStartMinute
+        case restEndMinute
+        case restMessage
     }
 
     init(from decoder: Decoder) throws {
@@ -82,7 +98,11 @@ struct Preferences: Codable {
             edgeStyle: try container.decodeIfPresent(String.self, forKey: .edgeStyle) ?? defaults.edgeStyle,
             compactScale: try container.decodeIfPresent(Double.self, forKey: .compactScale) ?? defaults.compactScale,
             backgroundOpacity: try container.decodeIfPresent(Double.self, forKey: .backgroundOpacity) ?? defaults.backgroundOpacity,
-            journalPath: try container.decodeIfPresent(String.self, forKey: .journalPath) ?? defaults.journalPath
+            journalPath: try container.decodeIfPresent(String.self, forKey: .journalPath) ?? defaults.journalPath,
+            restReminderEnabled: try container.decodeIfPresent(Bool.self, forKey: .restReminderEnabled) ?? defaults.restReminderEnabled,
+            restStartMinute: try container.decodeIfPresent(Int.self, forKey: .restStartMinute) ?? defaults.restStartMinute,
+            restEndMinute: try container.decodeIfPresent(Int.self, forKey: .restEndMinute) ?? defaults.restEndMinute,
+            restMessage: try container.decodeIfPresent(String.self, forKey: .restMessage) ?? defaults.restMessage
         )
     }
 
@@ -101,6 +121,10 @@ struct Preferences: Codable {
         try container.encode(Self.clamp(compactScale, to: Self.compactScaleRange), forKey: .compactScale)
         try container.encode(Self.clamp(backgroundOpacity, to: 0.15...0.9), forKey: .backgroundOpacity)
         try container.encode(journalPath, forKey: .journalPath)
+        try container.encode(restReminderEnabled, forKey: .restReminderEnabled)
+        try container.encode(Self.clamp(restStartMinute, to: 0...1439), forKey: .restStartMinute)
+        try container.encode(Self.clamp(restEndMinute, to: 0...1439), forKey: .restEndMinute)
+        try container.encode(Self.normalizedRestMessage(restMessage), forKey: .restMessage)
     }
 
     mutating func sanitize() {
@@ -113,6 +137,9 @@ struct Preferences: Codable {
         edgeStyle = Self.normalizedEdgeStyle(edgeStyle)
         compactScale = Self.clamp(compactScale, to: Self.compactScaleRange)
         backgroundOpacity = Self.clamp(backgroundOpacity, to: 0.15...0.9)
+        restStartMinute = Self.clamp(restStartMinute, to: 0...1439)
+        restEndMinute = Self.clamp(restEndMinute, to: 0...1439)
+        restMessage = Self.normalizedRestMessage(restMessage)
     }
 
     func preferredColorScheme() -> ColorScheme? {
@@ -156,5 +183,10 @@ struct Preferences: Codable {
 
     private static func clamp<T: Comparable>(_ value: T, to range: ClosedRange<T>) -> T {
         min(range.upperBound, max(range.lowerBound, value))
+    }
+
+    private static func normalizedRestMessage(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "我是高执行力、高精力的人。现在休息，明天更清醒地行动。" : String(trimmed.prefix(60))
     }
 }
