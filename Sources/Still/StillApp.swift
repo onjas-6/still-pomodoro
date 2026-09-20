@@ -249,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return
         }
         if restWindow == nil {
-            let window = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 170),
+            let window = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 500, height: 240),
                                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             window.title = "Still — Time to rest"
             window.isOpaque = false
