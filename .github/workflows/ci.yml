@@ -10,6 +10,8 @@ jobs:
       - run: ./scripts/test-inspiration.sh
       - run: swift test
       - run: ./scripts/build.sh
+        env:
+          STILL_INSTALL_PATH: build/Still.app
       - run: ./build/Still.app/Contents/MacOS/Still --self-test
       - uses: actions/upload-artifact@v4
         with:

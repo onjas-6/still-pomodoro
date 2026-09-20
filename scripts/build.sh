@@ -13,4 +13,10 @@ cp Resources/Info.plist "$app/Contents/Info.plist"
 cp Resources/StillChime.aiff "$app/Contents/Resources/StillChime.aiff"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 codesign --force --deep --sign "${CODE_SIGN_IDENTITY:--}" "$app"
-printf 'Built %s\n' "$PWD/$app"
+# Install to the destination (default /Applications) and remove the build copy
+# so no duplicate app shows up in Launchpad or Spotlight.
+dest="${STILL_INSTALL_PATH:-/Applications/Still.app}"
+mkdir -p "$(dirname "$dest")"
+rm -rf "$dest"
+mv "$app" "$dest"
+printf 'Built %s\n' "$dest"

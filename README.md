@@ -41,11 +41,13 @@ macOS 14+ and Swift 6 (Xcode or Command Line Tools). No third-party dependencies
 git clone https://github.com/onjas-6/still-pomodoro.git
 cd still-pomodoro
 ./scripts/build.sh
-open build/Still.app
+open /Applications/Still.app
 ```
 
 Open `Package.swift` in Xcode to develop. Run the bundled `.app` so macOS can identify
-it for notifications. Builds are ad-hoc signed for local use. Public trusted binary
+it for notifications. Builds are ad-hoc signed for local use and installed directly to
+`/Applications/Still.app` (override with `STILL_INSTALL_PATH`), so no duplicate build
+copy shows up in Launchpad or Spotlight. Public trusted binary
 releases need Developer ID signing and notarization; set `CODE_SIGN_IDENTITY` to use
 your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewhere.
 
@@ -63,7 +65,7 @@ your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewher
    Use **Open Markdown** to see the actual record in your editor.
 
 After quitting Still, you can also set the path from a terminal:
-`./build/Still.app/Contents/MacOS/Still --journal /path/to/focus-sessions.md`.
+`/Applications/Still.app/Contents/MacOS/Still --journal /path/to/focus-sessions.md`.
 
 The menu-bar leaf can show or hide the timer, open history, or quit. Hidden timers
 keep running. Quitting leaves an already-scheduled notification intact; a completed
@@ -121,7 +123,7 @@ collection and its sources belong outside the source checkout.
 ./scripts/test-inspiration.sh                  # local phrase format and validation
 swift test                                    # XCTest, with full Xcode
 ./scripts/build.sh
-./build/Still.app/Contents/MacOS/Still --self-test  # isolated persistence checks
+/Applications/Still.app/Contents/MacOS/Still --self-test  # isolated persistence checks
 ```
 
 - `Sources/StillCore` — timer state machine, sessions, Markdown journal.
@@ -129,11 +131,11 @@ swift test                                    # XCTest, with full Xcode
 - `scripts/generate-assets.swift` — reproducible original icon and chime.
 
 Tests use temporary data. On a logged-in Mac, also run
-`./build/Still.app/Contents/MacOS/Still --window-self-test` to check repeated resizing
+`/Applications/Still.app/Contents/MacOS/Still --window-self-test` to check repeated resizing
 and expanding/collapsing against a real native window. This opens an isolated preview
 and does not change your timer, journal, or saved window position.
 
-`./build/Still.app/Contents/MacOS/Still --render-self-test` checks CPU use across
+`/Applications/Still.app/Contents/MacOS/Still --render-self-test` checks CPU use across
 ready, running, paused, and completed panels, plus settings closure and appearance
 changes. It uses an isolated preview model and temporary data path. Its generous
 50% CPU threshold detects sustained layout loops, not frame-rate performance;
