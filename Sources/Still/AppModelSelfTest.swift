@@ -35,12 +35,13 @@ enum AppModelSelfTest {
             testLocalInspiration(in: root.appendingPathComponent("inspiration", isDirectory: true), recorder: &recorder)
             testQuietClock(in: root.appendingPathComponent("quiet-clock", isDirectory: true), recorder: &recorder)
             testRestReminder(in: root.appendingPathComponent("rest-reminder", isDirectory: true), recorder: &recorder)
+            testStayAwake(in: root.appendingPathComponent("stay-awake", isDirectory: true), recorder: &recorder)
         } catch {
             recorder.fail("Unable to create self-test workspace: \(error)")
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 16 test groups")
+            print("AppModel self-test passed: 17 test groups")
             return 0
         }
 
@@ -49,6 +50,69 @@ enum AppModelSelfTest {
             print("FAIL: \(failure)")
         }
         return 1
+    }
+
+    private static func testStayAwake(in directory: URL, recorder: inout Recorder) {
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let log = directory.appendingPathComponent("pmset.log")
+        let fake = directory.appendingPathComponent("pmset")
+        let battery = directory.appendingPathComponent("battery")
+        try? "Now drawing from 'AC Power'\n -InternalBattery-0\t80%; charging; present: true\n".write(to: battery, atomically: true, encoding: .utf8)
+        try? "#!/bin/sh\nif [ \"$1\" = -g ]; then cat '\(battery.path)'; else echo \"$*\" >> '\(log.path)'; fi\n"
+            .write(to: fake, atomically: true, encoding: .utf8)
+        try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+
+        func run(token: URL, contents: String, until stop: () -> Void, _ name: String) {
+            try? fileManager.removeItem(at: log)
+            try? contents.write(to: token, atomically: true, encoding: .utf8)
+            guard let script = StayAwake.helperScript(token: token.path, pid: ProcessInfo.processInfo.processIdentifier,
+                                                      pmset: fake.path, interval: 1) else {
+                recorder.fail("stay awake: \(name) helper script is unavailable"); return
+            }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", script]
+            let output = Pipe()
+            process.standardOutput = output
+            do { try process.run() } catch { recorder.fail("stay awake: \(name) could not start"); return }
+            process.waitUntilExit()
+            let pidText = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let pid = pid_t(pidText.trimmingCharacters(in: .whitespacesAndNewlines))
+            recorder.check(pid != nil, "stay awake: \(name) reports the watcher pid")
+            recorder.check(waitUntil(timeout: 1) { (try? String(contentsOf: log, encoding: .utf8)) == "-a disablesleep 1\n" },
+                           "stay awake: \(name) disables sleep first")
+            recorder.check(pid.map { kill($0, 0) == 0 } ?? false, "stay awake: \(name) watcher keeps running")
+            stop()
+            recorder.check(waitUntil(timeout: 5) { (try? String(contentsOf: log, encoding: .utf8)) == "-a disablesleep 1\n-a disablesleep 0\n" },
+                           "stay awake: \(name) restores sleep")
+            recorder.check(!fileManager.fileExists(atPath: token.path), "stay awake: \(name) removes the token")
+        }
+
+        let token = directory.appendingPathComponent("stay-awake.token")
+        run(token: token, contents: "0\n", until: { try? fileManager.removeItem(at: token) }, "turned off")
+        run(token: token, contents: "\(Int(Date().timeIntervalSince1970) + 2)\n", until: {}, "deadline")
+        run(token: token, contents: "0\n", until: {
+            try? "Now drawing from 'Battery Power'\n -InternalBattery-0\t8%; discharging; present: true\n"
+                .write(to: battery, atomically: true, encoding: .utf8)
+        }, "low battery")
+        recorder.check(StayAwake.helperScript(token: "/tmp/it's", pid: 1) == nil, "stay awake: rejects quotes in the token path")
+
+        let model = AppModel(dataDirectory: directory.appendingPathComponent("model", isDirectory: true), syncJournalOnLaunch: false)
+        model.preferences.stayAwakeLidClosed = false
+        model.startStayAwake(minutes: 120)
+        recorder.check(model.stayAwake.isActive, "stay awake: starts")
+        model.stayAwake.refresh(now: Date().addingTimeInterval(121 * 60))
+        recorder.check(!model.stayAwake.isActive, "stay awake: ends after its duration")
+        model.startStayAwake(minutes: nil)
+        model.stayAwake.refresh(now: Date().addingTimeInterval(365 * 86_400))
+        recorder.check(model.stayAwake.isActive, "stay awake: until turned off keeps going")
+        model.stayAwake.stop()
+        recorder.check(!model.stayAwake.isActive, "stay awake: stops")
+
+        let decoded = try? JSONDecoder().decode(Preferences.self, from: Data(#"{"stayAwakeMinutes": 5000}"#.utf8))
+        recorder.check(decoded?.stayAwakeMinutes == 1440 && decoded?.stayAwakeLidClosed == true,
+                       "stay awake: preferences clamp and default to lid-closed mode")
     }
 
     private static func testRestReminder(in directory: URL, recorder: inout Recorder) {

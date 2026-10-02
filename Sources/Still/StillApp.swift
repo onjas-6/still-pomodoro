@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var settingsWindow: NSWindow?
     private var restWindow: FloatingPanel?
     private var restObservation: AnyCancellable?
+    private var stayAwakeObservation: AnyCancellable?
     private var menu: NSMenu!
     private var preview = false
     private var compactFrame = NSRect.zero
@@ -91,7 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 self?.showRestReminder(active)
             }
         }
-        if !windowSelfTest && !renderSelfTest { setupMenuBar(); setupDismissal() }
+        if !windowSelfTest && !renderSelfTest {
+            setupMenuBar(); setupDismissal()
+            stayAwakeObservation = model.stayAwake.objectWillChange.sink { [weak self] in
+                DispatchQueue.main.async { self?.updateStatusIcon() }
+            }
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(showTimer), name: .showStill, object: nil)
         // A nil appearance follows system changes for both the native material and SwiftUI.
         appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
@@ -296,6 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panelAnimator.cancel()
         pendingFrameSave?.cancel()
         flushWindowPreferences()
+        model.stayAwake.stop()
         model.persist(); saveFrame()
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
         if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }
@@ -340,12 +347,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         addItem(model.primaryTitle, action: #selector(toggleTimer), key: "")
         addItem("Reset timer", action: #selector(resetTimer), key: "")
         menu.addItem(.separator())
+        menu.addItem(stayAwakeMenuItem())
+        menu.addItem(.separator())
         addItem("Session history", action: #selector(showHistory), key: "h")
         addItem("Open Markdown journal", action: #selector(openJournal), key: "")
         addItem("Preferences…", action: #selector(showSettings), key: ",")
         menu.addItem(.separator())
         addItem("Hide timer", action: #selector(hideTimer), key: "")
         addItem("Quit Still", action: #selector(quit), key: "q")
+    }
+    private func stayAwakeMenuItem() -> NSMenuItem {
+        let stayAwake = model.stayAwake
+        let item = NSMenuItem(title: stayAwake.isActive ? "Stay awake · on" : "Stay awake", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.addItem(NSMenuItem(title: stayAwake.statusText(), action: nil, keyEquivalent: ""))
+        submenu.addItem(.separator())
+        var choices = StayAwake.presetMinutes
+        if !choices.contains(model.preferences.stayAwakeMinutes) { choices.insert(model.preferences.stayAwakeMinutes, at: 0) }
+        for minutes in choices.sorted() {
+            let choice = NSMenuItem(title: "For " + Self.durationTitle(minutes), action: #selector(startStayAwake(_:)), keyEquivalent: "")
+            choice.target = self
+            choice.tag = minutes
+            submenu.addItem(choice)
+        }
+        let forever = NSMenuItem(title: "Until turned off", action: #selector(startStayAwake(_:)), keyEquivalent: "")
+        forever.target = self
+        forever.tag = 0
+        submenu.addItem(forever)
+        if stayAwake.isActive {
+            let off = NSMenuItem(title: "Turn off", action: #selector(stopStayAwake), keyEquivalent: "")
+            off.target = self
+            submenu.addItem(off)
+        }
+        submenu.addItem(.separator())
+        let lid = NSMenuItem(title: "Keep running with the lid closed", action: #selector(toggleLidClosed), keyEquivalent: "")
+        lid.target = self
+        lid.state = model.preferences.stayAwakeLidClosed ? .on : .off
+        submenu.addItem(lid)
+        item.submenu = submenu
+        return item
+    }
+    private static func durationTitle(_ minutes: Int) -> String {
+        if minutes % 60 == 0 { return minutes == 60 ? "1 hour" : "\(minutes / 60) hours" }
+        return "\(minutes) min"
+    }
+    private func updateStatusIcon() {
+        guard let button = statusItem?.button else { return }
+        let stayAwake = model.stayAwake
+        button.image = NSImage(systemSymbolName: stayAwake.isActive ? "leaf.circle.fill" : "leaf.circle",
+                               accessibilityDescription: "Still — focus timer")
+        button.toolTip = stayAwake.isActive ? "Still · " + stayAwake.statusText() : "Still"
+    }
+    @objc private func startStayAwake(_ sender: NSMenuItem) { model.startStayAwake(minutes: sender.tag == 0 ? nil : sender.tag) }
+    @objc private func stopStayAwake() { model.stayAwake.stop() }
+    @objc private func toggleLidClosed() {
+        model.preferences.stayAwakeLidClosed.toggle()
+        model.savePreferences()
+        // Apply the change to a running session, keeping its end time.
+        if let until = model.stayAwake.until {
+            let minutes = until == .distantFuture ? nil : max(1, Int((until.timeIntervalSinceNow / 60).rounded()))
+            model.startStayAwake(minutes: minutes)
+        }
     }
     private func addItem(_ title: String, action: Selector, key: String) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)

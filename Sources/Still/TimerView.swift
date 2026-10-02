@@ -164,6 +164,7 @@ struct TimerView: View {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
                         .help(model.journalError ?? model.storageError ?? "")
                 }
+                StayAwakeMenu(model: model, stayAwake: model.stayAwake)
                 Button(action: showHistory) { Image(systemName: "clock.arrow.circlepath").font(.system(size: 11)).frame(width: 19, height: 20) }
                     .buttonStyle(QuietButtonStyle()).help("Session history").accessibilityLabel("Session history")
                 Button(action: showSettings) { Image(systemName: "slider.horizontal.3").font(.system(size: 11)).frame(width: 19, height: 20) }
@@ -186,6 +187,27 @@ struct TimerView: View {
         }.buttonStyle(QuietButtonStyle()).accessibilityLabel("Start \(minutes) minute focus")
     }
     private func startBreak(_ mode: TimerMode) { model.startBreak(mode); collapse() }
+}
+
+private struct StayAwakeMenu: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var stayAwake: StayAwake
+
+    var body: some View {
+        Menu {
+            Text(stayAwake.statusText())
+            Divider()
+            ForEach(StayAwake.presetMinutes, id: \.self) { minutes in
+                Button("For \(minutes / 60) h") { model.startStayAwake(minutes: minutes) }
+            }
+            Button("Until turned off") { model.startStayAwake(minutes: nil) }
+            if stayAwake.isActive { Button("Turn off") { stayAwake.stop() } }
+        } label: {
+            Image(systemName: stayAwake.isActive ? "cup.and.saucer.fill" : "cup.and.saucer").font(.system(size: 11))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help(stayAwake.isActive ? stayAwake.statusText() : "Stay awake").accessibilityLabel("Stay awake")
+    }
 }
 
 private struct SoftSurface: View {

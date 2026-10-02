@@ -55,6 +55,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     let isPreview: Bool
     private let managesSystemNotifications: Bool
     let inspiration: InspirationStore
+    let stayAwake: StayAwake
 
     init(dataDirectory: URL? = nil, preview: Bool = false, syncJournalOnLaunch: Bool = true) {
         isPreview = preview
@@ -62,6 +63,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         dataURL = (dataDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Still", isDirectory: true)).appendingPathComponent("state.json")
         inspiration = InspirationStore(directory: dataURL.deletingLastPathComponent(), preview: preview)
+        stayAwake = StayAwake(directory: dataURL.deletingLastPathComponent(), enabled: !preview && dataDirectory == nil)
         super.init()
         if !preview { load() }
         let hadStoredJournalPath = !preferences.journalPath.isEmpty
@@ -173,6 +175,10 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         now = Date()
         persist()
         syncNotification(requestPermission: false)
+    }
+    /// - Parameter minutes: nil keeps the Mac awake until turned off.
+    func startStayAwake(minutes: Int?) {
+        stayAwake.start(minutes: minutes, lidClosed: preferences.stayAwakeLidClosed)
     }
     func savePreferences() {
         preferences.sanitize()

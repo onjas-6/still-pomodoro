@@ -23,6 +23,8 @@ struct Preferences: Codable {
     var restStartMinute: Int
     var restEndMinute: Int
     var restMessage: String
+    var stayAwakeMinutes: Int
+    var stayAwakeLidClosed: Bool
 
     init(
         focusMinutes: Int = 30,
@@ -41,7 +43,9 @@ struct Preferences: Codable {
         restReminderEnabled: Bool = true,
         restStartMinute: Int = 0,
         restEndMinute: Int = 8 * 60,
-        restMessage: String = "我是高执行力、高精力的人。现在休息，明天更清醒地行动。"
+        restMessage: String = "我是高执行力、高精力的人。现在休息，明天更清醒地行动。",
+        stayAwakeMinutes: Int = 120,
+        stayAwakeLidClosed: Bool = true
     ) {
         self.focusMinutes = Self.clamp(focusMinutes, to: 1...180)
         self.focusPresets = Self.normalizedFocusPresets(focusPresets)
@@ -60,6 +64,8 @@ struct Preferences: Codable {
         self.restStartMinute = Self.clamp(restStartMinute, to: 0...1439)
         self.restEndMinute = Self.clamp(restEndMinute, to: 0...1439)
         self.restMessage = Self.normalizedRestMessage(restMessage)
+        self.stayAwakeMinutes = Self.clamp(stayAwakeMinutes, to: 1...1440)
+        self.stayAwakeLidClosed = stayAwakeLidClosed
     }
 
     enum CodingKeys: String, CodingKey {
@@ -80,6 +86,8 @@ struct Preferences: Codable {
         case restStartMinute
         case restEndMinute
         case restMessage
+        case stayAwakeMinutes
+        case stayAwakeLidClosed
     }
 
     init(from decoder: Decoder) throws {
@@ -102,7 +110,9 @@ struct Preferences: Codable {
             restReminderEnabled: try container.decodeIfPresent(Bool.self, forKey: .restReminderEnabled) ?? defaults.restReminderEnabled,
             restStartMinute: try container.decodeIfPresent(Int.self, forKey: .restStartMinute) ?? defaults.restStartMinute,
             restEndMinute: try container.decodeIfPresent(Int.self, forKey: .restEndMinute) ?? defaults.restEndMinute,
-            restMessage: try container.decodeIfPresent(String.self, forKey: .restMessage) ?? defaults.restMessage
+            restMessage: try container.decodeIfPresent(String.self, forKey: .restMessage) ?? defaults.restMessage,
+            stayAwakeMinutes: try container.decodeIfPresent(Int.self, forKey: .stayAwakeMinutes) ?? defaults.stayAwakeMinutes,
+            stayAwakeLidClosed: try container.decodeIfPresent(Bool.self, forKey: .stayAwakeLidClosed) ?? defaults.stayAwakeLidClosed
         )
     }
 
@@ -125,6 +135,8 @@ struct Preferences: Codable {
         try container.encode(Self.clamp(restStartMinute, to: 0...1439), forKey: .restStartMinute)
         try container.encode(Self.clamp(restEndMinute, to: 0...1439), forKey: .restEndMinute)
         try container.encode(Self.normalizedRestMessage(restMessage), forKey: .restMessage)
+        try container.encode(Self.clamp(stayAwakeMinutes, to: 1...1440), forKey: .stayAwakeMinutes)
+        try container.encode(stayAwakeLidClosed, forKey: .stayAwakeLidClosed)
     }
 
     mutating func sanitize() {
@@ -140,6 +152,7 @@ struct Preferences: Codable {
         restStartMinute = Self.clamp(restStartMinute, to: 0...1439)
         restEndMinute = Self.clamp(restEndMinute, to: 0...1439)
         restMessage = Self.normalizedRestMessage(restMessage)
+        stayAwakeMinutes = Self.clamp(stayAwakeMinutes, to: 1...1440)
     }
 
     func preferredColorScheme() -> ColorScheme? {
