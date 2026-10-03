@@ -180,6 +180,13 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     func startStayAwake(minutes: Int?) {
         stayAwake.start(minutes: minutes, lidClosed: preferences.stayAwakeLidClosed)
     }
+    /// Saves the lid-closed choice and applies it to a running session, keeping its end time.
+    func setStayAwakeLidClosed(_ enabled: Bool) {
+        preferences.stayAwakeLidClosed = enabled
+        savePreferences()
+        guard let until = stayAwake.until else { return }
+        startStayAwake(minutes: until == .distantFuture ? nil : max(1, Int((until.timeIntervalSinceNow / 60).rounded())))
+    }
     func savePreferences() {
         preferences.sanitize()
         if timer.phase == .ready { timer.configure(mode: timer.mode, duration: duration(for: timer.mode)) }

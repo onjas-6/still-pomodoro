@@ -40,11 +40,18 @@ final class StayAwake: ObservableObject {
 
     var isActive: Bool { until != nil }
 
-    func statusText(now: Date = Date()) -> String {
+    func statusText() -> String {
+        guard let until else { return "Off — your Mac sleeps normally" }
+        let lid = lidClosedActive ? ", even with the lid closed" : " while the lid is open"
+        if until == .distantFuture { return "Mac won't sleep until you turn this off" + lid }
+        return "Mac won't sleep until \(until.formatted(date: .omitted, time: .shortened))" + lid
+    }
+
+    /// Compact status for the floating timer, such as "On until 3:00 PM · lid closed OK".
+    func shortStatusText() -> String {
         guard let until else { return "Off" }
-        let lid = lidClosedActive ? " · lid closed OK" : ""
-        if until == .distantFuture { return "Awake until turned off" + lid }
-        return "Awake until \(until.formatted(date: .omitted, time: .shortened))" + lid
+        let time = until == .distantFuture ? "On until you turn it off" : "On until " + until.formatted(date: .omitted, time: .shortened)
+        return time + (lidClosedActive ? " · lid closed OK" : " · lid open only")
     }
 
     /// - Parameter minutes: nil keeps the Mac awake until turned off.

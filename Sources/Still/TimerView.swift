@@ -72,6 +72,7 @@ struct TimerView: View {
                 if panelState.expanded || expansion > 0 {
                     VStack(spacing: 12) {
                         controls
+                        StayAwakeRow(model: model, stayAwake: model.stayAwake, palette: palette)
                         InspirationView(store: model.inspiration, palette: palette)
                     }
                     .frame(width: 220)
@@ -164,7 +165,6 @@ struct TimerView: View {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
                         .help(model.journalError ?? model.storageError ?? "")
                 }
-                StayAwakeMenu(model: model, stayAwake: model.stayAwake)
                 Button(action: showHistory) { Image(systemName: "clock.arrow.circlepath").font(.system(size: 11)).frame(width: 19, height: 20) }
                     .buttonStyle(QuietButtonStyle()).help("Session history").accessibilityLabel("Session history")
                 Button(action: showSettings) { Image(systemName: "slider.horizontal.3").font(.system(size: 11)).frame(width: 19, height: 20) }
@@ -189,24 +189,47 @@ struct TimerView: View {
     private func startBreak(_ mode: TimerMode) { model.startBreak(mode); collapse() }
 }
 
-private struct StayAwakeMenu: View {
+/// An explicit "no sleep" switch: keeps the Mac running, even with the lid closed.
+private struct StayAwakeRow: View {
     @ObservedObject var model: AppModel
     @ObservedObject var stayAwake: StayAwake
+    let palette: Palette
 
     var body: some View {
         Menu {
             Text(stayAwake.statusText())
             Divider()
             ForEach(StayAwake.presetMinutes, id: \.self) { minutes in
-                Button("For \(minutes / 60) h") { model.startStayAwake(minutes: minutes) }
+                Button("No sleep for \(minutes / 60) h") { model.startStayAwake(minutes: minutes) }
             }
-            Button("Until turned off") { model.startStayAwake(minutes: nil) }
-            if stayAwake.isActive { Button("Turn off") { stayAwake.stop() } }
+            Button("No sleep until I turn it off") { model.startStayAwake(minutes: nil) }
+            if stayAwake.isActive { Button("Let my Mac sleep again") { stayAwake.stop() } }
+            Divider()
+            Toggle("Also with the lid closed", isOn: Binding(
+                get: { model.preferences.stayAwakeLidClosed },
+                set: { model.setStayAwakeLidClosed($0) }))
         } label: {
-            Image(systemName: stayAwake.isActive ? "cup.and.saucer.fill" : "cup.and.saucer").font(.system(size: 11))
+            HStack(spacing: 6) {
+                Image(systemName: stayAwake.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
+                    .font(.system(size: 10))
+                    .foregroundStyle(stayAwake.isActive ? palette.progress : palette.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Keep Mac awake (no sleep)").font(.system(size: 10, weight: .medium))
+                    if stayAwake.isActive {
+                        Text(stayAwake.shortStatusText()).font(.system(size: 9)).foregroundStyle(palette.secondary)
+                    }
+                }
+                .lineLimit(1).fixedSize()
+                Spacer(minLength: 4)
+                if !stayAwake.isActive { Text("Off").font(.system(size: 10)).foregroundStyle(palette.secondary).fixedSize() }
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold)).foregroundStyle(palette.secondary)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5).frame(maxWidth: .infinity, minHeight: 26)
+            .background(palette.ink.opacity(stayAwake.isActive ? 0.075 : 0.04), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help(stayAwake.isActive ? stayAwake.statusText() : "Stay awake").accessibilityLabel("Stay awake")
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        .help(stayAwake.isActive ? stayAwake.statusText() : "Stop your Mac from sleeping for a while, even with the lid closed")
+        .accessibilityLabel("Keep Mac awake")
     }
 }
 

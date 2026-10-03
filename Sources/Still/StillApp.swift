@@ -54,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let scale = model.preferences.compactScale
         return NSSize(width: (128 * scale).rounded(), height: (52 * scale).rounded())
     }
-    private let expandedSize = NSSize(width: 256, height: 274)
+    private let expandedSize = NSSize(width: 256, height: 300)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         windowSelfTest = CommandLine.arguments.contains("--window-self-test")
@@ -358,29 +358,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     private func stayAwakeMenuItem() -> NSMenuItem {
         let stayAwake = model.stayAwake
-        let item = NSMenuItem(title: stayAwake.isActive ? "Stay awake · on" : "Stay awake", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: stayAwake.isActive ? "Keep Mac awake (no sleep) · on" : "Keep Mac awake (no sleep)", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         submenu.addItem(NSMenuItem(title: stayAwake.statusText(), action: nil, keyEquivalent: ""))
         submenu.addItem(.separator())
         var choices = StayAwake.presetMinutes
         if !choices.contains(model.preferences.stayAwakeMinutes) { choices.insert(model.preferences.stayAwakeMinutes, at: 0) }
         for minutes in choices.sorted() {
-            let choice = NSMenuItem(title: "For " + Self.durationTitle(minutes), action: #selector(startStayAwake(_:)), keyEquivalent: "")
+            let choice = NSMenuItem(title: "No sleep for " + Self.durationTitle(minutes), action: #selector(startStayAwake(_:)), keyEquivalent: "")
             choice.target = self
             choice.tag = minutes
             submenu.addItem(choice)
         }
-        let forever = NSMenuItem(title: "Until turned off", action: #selector(startStayAwake(_:)), keyEquivalent: "")
+        let forever = NSMenuItem(title: "No sleep until I turn it off", action: #selector(startStayAwake(_:)), keyEquivalent: "")
         forever.target = self
         forever.tag = 0
         submenu.addItem(forever)
         if stayAwake.isActive {
-            let off = NSMenuItem(title: "Turn off", action: #selector(stopStayAwake), keyEquivalent: "")
+            let off = NSMenuItem(title: "Let my Mac sleep again", action: #selector(stopStayAwake), keyEquivalent: "")
             off.target = self
             submenu.addItem(off)
         }
         submenu.addItem(.separator())
-        let lid = NSMenuItem(title: "Keep running with the lid closed", action: #selector(toggleLidClosed), keyEquivalent: "")
+        let lid = NSMenuItem(title: "Also with the lid closed", action: #selector(toggleLidClosed), keyEquivalent: "")
         lid.target = self
         lid.state = model.preferences.stayAwakeLidClosed ? .on : .off
         submenu.addItem(lid)
@@ -400,15 +400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     @objc private func startStayAwake(_ sender: NSMenuItem) { model.startStayAwake(minutes: sender.tag == 0 ? nil : sender.tag) }
     @objc private func stopStayAwake() { model.stayAwake.stop() }
-    @objc private func toggleLidClosed() {
-        model.preferences.stayAwakeLidClosed.toggle()
-        model.savePreferences()
-        // Apply the change to a running session, keeping its end time.
-        if let until = model.stayAwake.until {
-            let minutes = until == .distantFuture ? nil : max(1, Int((until.timeIntervalSinceNow / 60).rounded()))
-            model.startStayAwake(minutes: minutes)
-        }
-    }
+    @objc private func toggleLidClosed() { model.setStayAwakeLidClosed(!model.preferences.stayAwakeLidClosed) }
     private func addItem(_ title: String, action: Selector, key: String) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self

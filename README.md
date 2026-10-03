@@ -32,9 +32,9 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   softly pulsing reminder returns after a 10-minute delay, even if the timer is hidden.
   You can write your own short message. A daily start notification is available when
   macOS notifications are allowed.
-- **Stay awake.** Like `caffeinate`: keep your Mac awake for 1, 2, 4, or 8 hours, your own
-  duration, or until turned off — from the menu bar, the cup in the expanded timer, or Preferences.
-  With **Keep running with the lid closed** on, Still asks for your administrator password once
+- **Keep Mac awake (no sleep).** Like `caffeinate`: stop your Mac from sleeping for 1, 2, 4, or 8 hours, your own
+  duration, or until turned off — from the menu bar, the expanded timer, or Preferences.
+  With **Also with the lid closed** on, Still asks for your administrator password once
   per session to set `pmset disablesleep`. A small watcher restores normal sleep when time is up,
   Still quits, or the battery drops below 10% while unplugged.
 - **A little perspective.** An expanded-only thought, with a quiet button for the next one.

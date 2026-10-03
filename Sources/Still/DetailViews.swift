@@ -93,7 +93,7 @@ struct PreferencesView: View {
                 }
             }
 
-            section("STAY AWAKE") {
+            section("KEEP MAC AWAKE · NO SLEEP") {
                 StayAwakePreferences(model: model, stayAwake: model.stayAwake, palette: palette)
             }
 
@@ -156,7 +156,6 @@ struct PreferencesView: View {
         .onChange(of: model.preferences.notificationsEnabled) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.restReminderEnabled) { _, _ in model.savePreferences() }
         .onChange(of: model.preferences.stayAwakeMinutes) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.stayAwakeLidClosed) { _, _ in model.savePreferences() }
     }
 
     private func label(_ text: String) -> some View {
@@ -236,29 +235,30 @@ private struct StayAwakePreferences: View {
 
     var body: some View {
         HStack {
-            Text("Keep awake for").font(.system(size: 12))
+            Text("Don't let my Mac sleep for").font(.system(size: 12))
             Spacer()
             DurationField(title: "Stay awake minutes", value: $model.preferences.stayAwakeMinutes, range: 1...1440)
                 .frame(width: 50, height: 22)
             Text("min").font(.system(size: 11)).foregroundStyle(palette.secondary)
             Stepper("Stay awake minutes", value: $model.preferences.stayAwakeMinutes, in: 1...1440, step: 30).labelsHidden().fixedSize()
         }
-        Toggle("Keep running with the lid closed", isOn: $model.preferences.stayAwakeLidClosed)
+        Toggle("Also with the lid closed", isOn: Binding(get: { model.preferences.stayAwakeLidClosed },
+                                                       set: { model.setStayAwakeLidClosed($0) }))
         HStack(spacing: 9) {
             if stayAwake.isActive {
-                Button("Stop") { stayAwake.stop() }
+                Button("Let my Mac sleep again") { stayAwake.stop() }
             } else {
                 Button("Start · \(StayAwakePreferences.format(model.preferences.stayAwakeMinutes))") {
                     model.startStayAwake(minutes: model.preferences.stayAwakeMinutes)
                 }
-                Button("Until turned off") { model.startStayAwake(minutes: nil) }
+                Button("Until I turn it off") { model.startStayAwake(minutes: nil) }
             }
             Spacer()
             Text(stayAwake.isRequestingLidMode ? "Waiting for password…" : stayAwake.statusText())
                 .font(.system(size: 10)).foregroundStyle(palette.secondary)
         }
         .controlSize(.small)
-        Text("Like caffeinate. Lid-closed mode asks for your password once per session, then restores normal sleep when time is up, Still quits, or the battery drops below 10%. Keep the Mac ventilated.")
+        Text("Like caffeinate: downloads, builds, and other work keep running instead of the Mac going to sleep. Lid-closed mode asks for your password once per session, then restores normal sleep when time is up, Still quits, or the battery drops below 10%. Keep the Mac ventilated.")
             .font(.system(size: 10)).foregroundStyle(palette.secondary)
         if let error = stayAwake.lidError {
             Text(error).font(.system(size: 10)).foregroundStyle(.orange)
