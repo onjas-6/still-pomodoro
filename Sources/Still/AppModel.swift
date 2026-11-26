@@ -37,12 +37,14 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @Published private(set) var focusCompletionAlertActive = false
     @Published var storageError: String?
     @Published var notificationStatus = "Not requested"
+    @Published private(set) var bedtimeNotificationStatus = "Checking daily notification…"
     @Published var journalError: String?
     @Published private(set) var journalIsBusy = false
     var onWindowPreferencesChanged: (() -> Void)?
     private var pulse: AnyCancellable?
     let playTone: (AlertTone) -> Void
     private var notificationGeneration = 0
+    private var restNotificationGeneration = 0
     private var hasNotificationPermission = false
     private var systemChimeScheduled = false
     private var restSnoozedUntil: Date?
@@ -506,9 +508,12 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     }
     private func refreshNotificationStatus() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
-        hasNotificationPermission = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+        hasNotificationPermission = false
         switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral: notificationStatus = "Allowed"
+        case .authorized, .provisional, .ephemeral:
+            hasNotificationPermission = true
+            notificationStatus = settings.alertSetting == .enabled && settings.alertStyle != .none
+                ? "Allowed" : "Banners off in System Settings"
         case .denied: notificationStatus = "Off in System Settings"
         case .notDetermined: notificationStatus = "Not requested"
         @unknown default: notificationStatus = "Unavailable"
@@ -573,26 +578,37 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         }
         _ = accepted.wait(timeout: .now() + 0.35)
     }
-    private func syncRestNotification() {
+    func syncRestNotification() {
         guard managesSystemNotifications else { return }
+        restNotificationGeneration += 1
+        let generation = restNotificationGeneration
         let center = UNUserNotificationCenter.current()
-        let id = "still.rest.start"
-        center.removePendingNotificationRequests(withIdentifiers: [id])
-        guard preferences.restReminderEnabled,
-              preferences.restStartMinute != preferences.restEndMinute else { return }
-        let minute = preferences.restStartMinute
-        let message = preferences.restMessage
+        guard let request = RestSchedule.notificationRequest(for: preferences) else {
+            center.removePendingNotificationRequests(withIdentifiers: [RestSchedule.notificationID])
+            return
+        }
         Task {
             await refreshNotificationStatus()
-            guard hasNotificationPermission, preferences.restReminderEnabled,
-                  preferences.restStartMinute == minute else { return }
-            let content = UNMutableNotificationContent()
-            content.title = "Time to rest"
-            content.body = message
-            let components = DateComponents(hour: minute / 60, minute: minute % 60)
-            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
-            do { try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger)) }
-            catch { notificationStatus = "Could not schedule: \(error.localizedDescription)" }
+            guard generation == restNotificationGeneration else { return }
+            guard hasNotificationPermission else {
+                bedtimeNotificationStatus = "Daily notification: " + notificationStatus
+                return
+            }
+            let pending = await center.pendingNotificationRequests()
+            guard generation == restNotificationGeneration else { return }
+            let existing = pending.first { $0.identifier == request.identifier }
+            do {
+                if existing?.trigger != request.trigger || existing?.content.body != request.content.body {
+                    // Adding the same identifier replaces the previous bedtime without a gap.
+                    try await center.add(request)
+                }
+                guard generation == restNotificationGeneration else { return }
+                bedtimeNotificationStatus = notificationStatus == "Allowed"
+                    ? "Daily notification scheduled." : "Daily notification scheduled. Banners are off."
+            } catch {
+                guard generation == restNotificationGeneration else { return }
+                bedtimeNotificationStatus = "Could not schedule daily notification: \(error.localizedDescription)"
+            }
         }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {

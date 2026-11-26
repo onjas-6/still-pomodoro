@@ -4,6 +4,7 @@
 import Foundation
 import Combine
 import StillCore
+import UserNotifications
 
 /// Dependency-free integration checks for persistence and timer behavior in `AppModel`.
 /// Invoke this from the app's `@main` entry point before `NSApplication.run()`.
@@ -205,6 +206,21 @@ enum AppModelSelfTest {
                        "rest window: inactive at end")
         recorder.check(!RestSchedule.contains(date(19, 0, 0), startMinute: 0, endMinute: 0, calendar: calendar),
                        "rest window: matching start and end do not create an all-day alert")
+
+        var bedtime = Preferences(restStartMinute: 45, restEndMinute: 480)
+        let request = RestSchedule.notificationRequest(for: bedtime)
+        let trigger = request?.trigger as? UNCalendarNotificationTrigger
+        recorder.check(request?.identifier == "still.rest.start" && trigger?.repeats == true
+                       && trigger?.dateComponents == DateComponents(hour: 0, minute: 45),
+                       "bedtime: repeating local notification at 00:45")
+        recorder.check(!RestSchedule.contains(date(19, 0, 44), startMinute: 45, endMinute: 480, calendar: calendar)
+                       && RestSchedule.contains(date(19, 0, 45), startMinute: 45, endMinute: 480, calendar: calendar),
+                       "bedtime: panel opens at the same minute as the notification")
+        bedtime.restEndMinute = 45
+        recorder.check(RestSchedule.notificationRequest(for: bedtime) == nil, "bedtime: equal times cancel notification")
+        bedtime.restEndMinute = 480
+        bedtime.restReminderEnabled = false
+        recorder.check(RestSchedule.notificationRequest(for: bedtime) == nil, "bedtime: disabling cancels notification")
 
         let model = AppModel(dataDirectory: directory, preview: true)
         model.preferences.restStartMinute = 22 * 60

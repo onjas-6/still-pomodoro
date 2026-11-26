@@ -46,6 +46,8 @@ struct PreferencesView: View {
                 Text("A few small things to make Still yours.").font(.system(size: 12)).foregroundStyle(palette.secondary)
             }
 
+            bedtimeSettings
+
             section("FOCUS") {
                 durationRow("Default focus", value: $model.preferences.focusMinutes, range: 1...180)
                 HStack(spacing: 10) {
@@ -88,27 +90,6 @@ struct PreferencesView: View {
                 sliderRow("Collapsed timer size", value: $model.preferences.compactScale, range: Preferences.compactScaleRange, display: "\(Int((model.preferences.compactScale * 100).rounded()))%")
                 sliderRow("Background opacity", value: $model.preferences.backgroundOpacity, range: 0.15...0.9, display: "\(Int(model.preferences.backgroundOpacity * 100))%")
                 Toggle("Float above other windows", isOn: $model.preferences.floatOnTop)
-            }
-
-            section("REST HOURS") {
-                Toggle("Remind me to stop working", isOn: $model.preferences.restReminderEnabled)
-                HStack(spacing: 12) {
-                    DatePicker("From", selection: restTimeBinding(\.restStartMinute), displayedComponents: .hourAndMinute)
-                    DatePicker("Until", selection: restTimeBinding(\.restEndMinute), displayedComponents: .hourAndMinute)
-                }
-                .datePickerStyle(.field)
-                HStack {
-                    TextField("Reminder message", text: $restMessageDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit(saveRestMessage)
-                    Button("Save", action: saveRestMessage).buttonStyle(.link)
-                }
-                Text("Use up to 60 characters. The reminder stays on screen and gently flashes during these hours. You can delay it for 10 minutes. A daily notification is sent at the start when allowed.")
-                    .font(.system(size: 10)).foregroundStyle(palette.secondary)
-                if model.preferences.restStartMinute == model.preferences.restEndMinute {
-                    Text("Choose different start and end times.")
-                        .font(.system(size: 10)).foregroundStyle(.orange)
-                }
             }
 
             section("KEEP MAC AWAKE · NO SLEEP") {
@@ -157,6 +138,46 @@ struct PreferencesView: View {
     private func label(_ text: String) -> some View {
         Text(text).font(.system(size: 9, weight: .semibold)).tracking(2).foregroundStyle(palette.secondary)
     }
+    private var bedtimeSettings: some View {
+        section("BEDTIME REMINDER") {
+            Toggle("Remind me at bedtime", isOn: $model.preferences.restReminderEnabled)
+            HStack(spacing: 18) {
+                DatePicker("Bedtime", selection: restTimeBinding(\.restStartMinute), displayedComponents: .hourAndMinute)
+                DatePicker("Until", selection: restTimeBinding(\.restEndMinute), displayedComponents: .hourAndMinute)
+            }
+            .datePickerStyle(.field)
+            HStack {
+                TextField("Reminder message", text: $restMessageDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(saveRestMessage)
+                Button("Save message", action: saveRestMessage).buttonStyle(.link)
+            }
+            if model.preferences.restStartMinute == model.preferences.restEndMinute {
+                Text("Choose different bedtime and end times.")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if model.preferences.restReminderEnabled {
+                HStack {
+                    Text(model.bedtimeNotificationStatus)
+                        .font(.caption).foregroundStyle(palette.secondary)
+                    Spacer()
+                    if model.notificationStatus != "Allowed" { notificationSettingsButton }
+                }
+                Text("While Still is open, the bedtime reminder can be snoozed for 5 minutes.")
+                    .font(.caption).foregroundStyle(palette.secondary)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.syncRestNotification()
+        }
+    }
+
+    private var notificationSettingsButton: some View {
+        Button(model.notificationStatus == "Not requested" ? "Allow notifications" : "System Settings") {
+            if model.notificationStatus == "Not requested" { model.enableNotifications() }
+            else { model.openNotificationSettings() }
+        }.buttonStyle(.link).font(.caption)
+    }
+
     private var alertSettings: some View {
         section("ALERTS") {
             Toggle("Timer and inactivity sounds", isOn: $model.preferences.soundEnabled)
@@ -166,10 +187,7 @@ struct PreferencesView: View {
             HStack(spacing: 8) {
                 Text(model.notificationStatus).font(.system(size: 10)).foregroundStyle(palette.secondary)
                 Spacer()
-                Button(model.notificationStatus == "Not requested" ? "Allow notifications" : "System Settings") {
-                    if model.notificationStatus == "Not requested" { model.enableNotifications() }
-                    else { model.openNotificationSettings() }
-                }.buttonStyle(.link).font(.system(size: 10))
+                notificationSettingsButton
             }
         }
         .onChange(of: model.preferences.timerTone) { _, _ in model.savePreferences() }
@@ -210,10 +228,18 @@ struct PreferencesView: View {
     }
     private func restTimeBinding(_ keyPath: WritableKeyPath<Preferences, Int>) -> Binding<Date> {
         Binding(
-            get: { Calendar.current.startOfDay(for: Date()).addingTimeInterval(Double(model.preferences[keyPath: keyPath] * 60)) },
+            get: {
+                let minute = model.preferences[keyPath: keyPath]
+                // The picker edits only a local clock time. Use an occurrence even if today's
+                // daylight-saving transition skips that hour.
+                let reference = Date(timeIntervalSinceReferenceDate: 0)
+                let time = DateComponents(hour: minute / 60, minute: minute % 60)
+                return Calendar.current.nextDate(after: reference, matching: time, matchingPolicy: .strict) ?? reference
+            },
             set: { date in
-                let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
-                model.preferences[keyPath: keyPath] = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+                let calendar = Calendar.current
+                model.preferences[keyPath: keyPath] = calendar.component(.hour, from: date) * 60
+                    + calendar.component(.minute, from: date)
                 model.savePreferences()
             }
         )

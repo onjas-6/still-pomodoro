@@ -50,8 +50,8 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   audible reminder. Return to the keyboard or trackpad, acknowledge the panel, or snooze it.
   In **Preferences → Focus reminders**, choose Off, 1, 3, 5, or 10 minutes.
   The check uses elapsed input time on the Mac. Reading and thinking can also trigger it.
-- **Rest hours.** Set a daily stop-work window (00:00–08:00 by default). A visible,
-  softly pulsing reminder returns after a 10-minute delay, even if the timer is hidden.
+- **Bedtime reminder.** Set a daily stop-work window (00:00–08:00 by default). A visible,
+  softly pulsing reminder returns after a 5-minute delay, even if the timer is hidden.
   You can write your own short message. A daily start notification is available when
   macOS notifications are allowed.
 - **Keep Mac awake (no sleep).** Like `caffeinate`: stop your Mac from sleeping for 1, 2, 4, or 8 hours, your own
@@ -94,10 +94,11 @@ your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewher
    1–180 minutes. Changes apply to future sessions and preserve the active countdown.
 4. Under **Markdown journal**, enter a path and click **Save path**, or choose a file.
    Use **Open Markdown** to see the actual record in your editor.
-5. Under **Rest hours**, choose when to stop and resume, and edit the reminder text.
+5. At the top of Preferences, **Bedtime reminder** lets you set the daily notification time,
+   the end of the reminder window, and the reminder text.
    Times use your Mac's local clock; windows can cross midnight. The reminder remains
-   visible while Still is running and the Mac is awake. **10 分钟后再提醒** delays it
-   for 10 minutes. Turning off **Remind me to stop working** disables the schedule.
+   visible while Still is running and the Mac is awake. **5 分钟后再提醒** delays it
+   for 5 minutes. Turning off **Remind me at bedtime** disables the schedule.
 
 6. Under **Focus reminders**, add apps with **Choose app…** or enter a website.
    Each site matches its exact hostname and its www address. Add work or mobile subdomains
