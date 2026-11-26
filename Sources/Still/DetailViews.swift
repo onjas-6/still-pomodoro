@@ -12,6 +12,32 @@ struct PreferencesView: View {
     private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme, colorTheme: model.preferences.colorTheme) }
 
     var body: some View {
+        settingsContent
+        .frame(width: 440, height: min(790, (NSScreen.main?.visibleFrame.height ?? 900) - 80))
+        .background(palette.background).foregroundStyle(palette.ink)
+        .preferredColorScheme(model.preferences.preferredColorScheme())
+        .onAppear {
+            journalPathDraft = model.preferences.journalPath
+            restMessageDraft = model.preferences.restMessage
+        }
+        .onChange(of: model.preferences.journalPath) { _, path in journalPathDraft = path }
+        .onChange(of: model.preferences.focusMinutes) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.focusPresets) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.shortBreakMinutes) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.longBreakMinutes) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.theme) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.colorTheme) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.edgeStyle) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.compactScale) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.backgroundOpacity) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.floatOnTop) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.soundEnabled) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.notificationsEnabled) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.restReminderEnabled) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.stayAwakeMinutes) { _, _ in model.savePreferences() }
+    }
+
+    private var settingsContent: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
@@ -36,20 +62,7 @@ struct PreferencesView: View {
                     .font(.system(size: 10)).foregroundStyle(palette.secondary)
             }
 
-            section("ALERTS") {
-                Toggle("Timer and inactivity sounds", isOn: $model.preferences.soundEnabled)
-                soundRow("Timer sound", selection: $model.preferences.timerTone, choices: AlertTone.timerChoices)
-                soundRow("Inactivity sound", selection: $model.preferences.inactivityTone, choices: AlertTone.allCases)
-                Toggle("Notify when a timer ends", isOn: $model.preferences.notificationsEnabled)
-                HStack(spacing: 8) {
-                    Text(model.notificationStatus).font(.system(size: 10)).foregroundStyle(palette.secondary)
-                    Spacer()
-                    Button(model.notificationStatus == "Not requested" ? "Allow notifications" : "System Settings") {
-                        if model.notificationStatus == "Not requested" { model.enableNotifications() }
-                        else { model.openNotificationSettings() }
-                    }.buttonStyle(.link).font(.system(size: 10))
-                }
-            }
+            alertSettings
 
             section("FOCUS REMINDERS") {
                 FocusTargetPreferences(store: focusTargets)
@@ -137,35 +150,30 @@ struct PreferencesView: View {
         .toggleStyle(.switch).controlSize(.small).tint(palette.ink)
         .padding(28).frame(width: 440)
         }
-        .frame(width: 440, height: min(790, (NSScreen.main?.visibleFrame.height ?? 900) - 80))
-        .background(palette.background).foregroundStyle(palette.ink)
-        .preferredColorScheme(model.preferences.preferredColorScheme())
-        .onAppear {
-            journalPathDraft = model.preferences.journalPath
-            restMessageDraft = model.preferences.restMessage
-        }
-        .onChange(of: model.preferences.journalPath) { _, path in journalPathDraft = path }
-        .onChange(of: model.preferences.focusMinutes) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.focusPresets) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.shortBreakMinutes) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.longBreakMinutes) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.theme) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.colorTheme) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.edgeStyle) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.compactScale) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.backgroundOpacity) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.floatOnTop) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.soundEnabled) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.timerTone) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.inactivityTone) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.notificationsEnabled) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.restReminderEnabled) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.stayAwakeMinutes) { _, _ in model.savePreferences() }
     }
 
     private func label(_ text: String) -> some View {
         Text(text).font(.system(size: 9, weight: .semibold)).tracking(2).foregroundStyle(palette.secondary)
     }
+    private var alertSettings: some View {
+        section("ALERTS") {
+            Toggle("Timer and inactivity sounds", isOn: $model.preferences.soundEnabled)
+            soundRow("Timer sound", selection: $model.preferences.timerTone, choices: AlertTone.timerChoices)
+            soundRow("Inactivity sound", selection: $model.preferences.inactivityTone, choices: AlertTone.allCases)
+            Toggle("Notify when a timer ends", isOn: $model.preferences.notificationsEnabled)
+            HStack(spacing: 8) {
+                Text(model.notificationStatus).font(.system(size: 10)).foregroundStyle(palette.secondary)
+                Spacer()
+                Button(model.notificationStatus == "Not requested" ? "Allow notifications" : "System Settings") {
+                    if model.notificationStatus == "Not requested" { model.enableNotifications() }
+                    else { model.openNotificationSettings() }
+                }.buttonStyle(.link).font(.system(size: 10))
+            }
+        }
+        .onChange(of: model.preferences.timerTone) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.inactivityTone) { _, _ in model.savePreferences() }
+    }
+
     private func soundRow(_ title: String, selection: Binding<AlertTone>, choices: [AlertTone]) -> some View {
         HStack(spacing: 8) {
             Picker(title, selection: selection) {
