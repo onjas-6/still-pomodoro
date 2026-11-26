@@ -41,9 +41,6 @@ struct InactivityEnvironment {
               session[kCGSessionOnConsoleKey as String] as? Bool == true else { return false }
         return session["CGSSessionScreenIsLocked"] as? Bool != true
     }
-    var playSound: () -> Void = {
-        if NSSound(named: "Tink")?.play() != true { NSSound.beep() }
-    }
 }
 
 @MainActor
@@ -168,7 +165,7 @@ final class FocusReminderMonitor {
             guard inactivity.desktopAvailable() else { resetInactivity(); return }
             checkIn = .visible
             updatePanel()
-            if model.preferences.soundEnabled { inactivity.playSound() }
+            if model.preferences.soundEnabled { model.playTone(model.preferences.inactivityTone) }
         } else if checkIn == .visible {
             // Give someone reaching for the acknowledgement or snooze buttons time to click.
             let returned = activityReturnedAt ?? now

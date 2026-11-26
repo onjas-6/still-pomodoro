@@ -27,16 +27,19 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   window shadow. Reduce Transparency uses a solid surface for readability.
 - **Your sessions, in Markdown.** Pick an existing `.md` file or a new path. Still
   appends completed focus sessions, preserving your notes and avoiding duplicates.
-- **Focus completion.** A two-note chime sounds when a focus timer ends. A high-contrast
+- **Focus completion.** Your selected timer sound plays when a focus timer ends. A high-contrast
   completion panel stays visible until you dismiss it or start your break, including when muted.
+- **Choose your sounds.** In **Preferences → Alerts**, choose and preview separate sounds
+  for timer endings and inactivity. Try a felt piano, kalimba, glass bell, or wood block,
+  or keep Still's original sounds. Each **Preview** button works even with automatic sounds off.
 - **Focus reminders.** Opening a listed app or website during focus shows **You need to focus.**
   Choose **1 min** or **5 min** to pause distraction reminders while the focus timer continues.
   When the time is up, Still checks your current app or website and reminds you if it is on
   your list. Leaving a listed destination clears its panel. **Dismiss for this visit** hides
   it until you leave and return.
 - **Inactivity check-in.** After three minutes without Mac input during focus, Still
-  plays a short ping and shows **Still focusing?**. A continuous idle spell gets one
-  ping. Return to the keyboard or trackpad, acknowledge the panel, or snooze it.
+  plays your inactivity sound and shows **Still focusing?**. Each idle spell gets one
+  audible reminder. Return to the keyboard or trackpad, acknowledge the panel, or snooze it.
   In **Preferences → Focus reminders**, choose Off, 1, 3, 5, or 10 minutes.
   The check uses elapsed input time on the Mac. Reading and thinking can also trigger it.
 - **Rest hours.** Set a daily stop-work window (00:00–08:00 by default). A visible,
@@ -174,7 +177,7 @@ swift test                                    # XCTest, with full Xcode
 
 - `Sources/StillCore` — timer state machine, sessions, Markdown journal.
 - `Sources/Still` — compact panel, controls, preferences, notifications, recovery cache.
-- `scripts/generate-assets.swift` — reproducible original icon and chime.
+- `scripts/generate-assets.swift` — reproducible original icon and alert sounds.
 
 Tests use temporary data. On a logged-in Mac, also run
 `/Applications/Still.app/Contents/MacOS/Still --window-self-test` to check repeated resizing
@@ -187,7 +190,8 @@ changes. It uses an isolated preview model and temporary data path. Its generous
 50% CPU threshold detects sustained layout loops, not frame-rate performance;
 check actual dragging and click-to-expand on a logged-in Mac as well.
 
-To regenerate assets, run `swift scripts/generate-assets.swift`.
+Run `swift scripts/generate-assets.swift --alert-sounds` to regenerate the four instrument sounds.
+Run it without arguments to regenerate all assets.
 
 ## Design references
 

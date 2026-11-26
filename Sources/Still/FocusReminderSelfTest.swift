@@ -93,7 +93,7 @@ enum FocusReminderSelfTest {
         model.reset()
         store.update { $0.enabled = false }
 
-        failures += await inactivityChecks(model: model, directory: directory.appendingPathComponent("inactivity"))
+        failures += await inactivityChecks(directory: directory.appendingPathComponent("inactivity"))
 
         var visit = FocusVisit()
         visit.enter(.distraction("example.org"))
@@ -109,20 +109,21 @@ enum FocusReminderSelfTest {
     }
 
     /// Uses only fake monotonic values; no real input state or sound is observed.
-    private static func inactivityChecks(model: AppModel, directory: URL) async -> [String] {
+    private static func inactivityChecks(directory: URL) async -> [String] {
         let store = FocusTargetStore(directory: directory)
         var idle: TimeInterval = 3_600
         var uptime: TimeInterval = 1_000
         var uptimeStart: TimeInterval = 1_000
         var desktopAvailable = true
-        var chimes = 0
+        var playedTones: [AlertTone] = []
+        let model = AppModel(dataDirectory: directory, preview: true, playTone: { playedTones.append($0) })
+        var chimes: Int { playedTones.count }
         let clock = SnoozeClock()
         let monitor = FocusReminderMonitor(
             model: model, store: store, frontmost: { nil },
             sleepForSnooze: { await clock.sleep(for: $0) },
             inactivity: InactivityEnvironment(
-                idleSeconds: { idle }, uptime: { uptime }, desktopAvailable: { desktopAvailable },
-                playSound: { chimes += 1 }
+                idleSeconds: { idle }, uptime: { uptime }, desktopAvailable: { desktopAvailable }
             )
         )
         defer { model.reset(); withExtendedLifetime(monitor) {} }
@@ -141,12 +142,13 @@ enum FocusReminderSelfTest {
 
         store.update { $0 = FocusTargets(enabled: true, apps: [], websites: [], idleMinutes: 1) }
         model.preferences.soundEnabled = true
+        model.preferences.inactivityTone = .wood
         model.startFocus(minutes: 10)
         let start = model.now
         tick(start, 59, 3_659)
         check(!visible() && chimes == 0, "Inactivity caps pre-focus idle at the focus baseline")
         tick(start, 60, 3_660)
-        check(visible() && chimes == 1, "Inactivity works with no app or website targets")
+        check(visible() && playedTones == [.wood], "Inactivity plays the selected sound with no app or website targets")
         tick(start, 61, 3_661)
         check(visible() && chimes == 1, "Inactivity presents and chimes once per idle episode")
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 // Created 2026-09-15 · gpt-5.6-terra · Codex
-// Generates Still's original icon and synthesized chime using only macOS frameworks.
+// Generates Still's original icon and synthesized alert sounds using only macOS frameworks.
 
 import AppKit
 import AVFoundation
@@ -14,6 +14,10 @@ let resourcesURL = projectURL.appendingPathComponent("Resources", isDirectory: t
 let previewURL = resourcesURL.appendingPathComponent("AppIcon.png")
 let icnsURL = resourcesURL.appendingPathComponent("AppIcon.icns")
 let chimeURL = resourcesURL.appendingPathComponent("StillChime.aiff")
+let feltPianoURL = resourcesURL.appendingPathComponent("StillFeltPiano.aiff")
+let kalimbaURL = resourcesURL.appendingPathComponent("StillKalimba.aiff")
+let glassURL = resourcesURL.appendingPathComponent("StillGlass.aiff")
+let woodURL = resourcesURL.appendingPathComponent("StillWood.aiff")
 
 try fileManager.createDirectory(at: resourcesURL, withIntermediateDirectories: true)
 
@@ -316,10 +320,151 @@ func createChime() throws -> Float {
     return peak
 }
 
+// MARK: - Alert sounds
+// These are deliberately synthesized rather than sampled, so the app ships only
+// original audio and every cue can be regenerated on a stock macOS install.
+
+func attack(_ t: Float, over duration: Float) -> Float {
+    guard t > 0 else { return 0 }
+    return sin(min(1, t / duration) * .pi / 2)
+}
+
+func release(_ t: Float, duration: Float, over releaseDuration: Float = 0.025) -> Float {
+    let remaining = duration - t
+    guard remaining > 0 else { return 0 }
+    return sin(min(1, remaining / releaseDuration) * .pi / 2)
+}
+
+func sine(_ frequency: Float, _ time: Float, phase: Float = 0) -> Float {
+    sin(2 * .pi * frequency * time + phase)
+}
+
+func writeAlertSound(
+    to destination: URL,
+    duration: Float,
+    peakTarget: Float,
+    sample: (Float) -> Float
+) throws -> Float {
+    let sampleRate: Double = 44_100
+    let frames = Int((Double(duration) * sampleRate).rounded(.up))
+    var samples = [Float](repeating: 0, count: frames)
+    var peak: Float = 0
+    for index in samples.indices {
+        let value = sample(Float(Double(index) / sampleRate))
+        samples[index] = value
+        peak = max(peak, abs(value))
+    }
+    guard peak > 0 else {
+        throw NSError(domain: "StillAssets", code: 6, userInfo: [NSLocalizedDescriptionKey: "Alert sound has no audible samples."])
+    }
+
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVSampleRateKey: sampleRate,
+        AVNumberOfChannelsKey: 1,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: true,
+        AVLinearPCMIsNonInterleaved: false
+    ]
+    try? fileManager.removeItem(at: destination)
+    let file = try AVAudioFile(forWriting: destination, settings: settings)
+    guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(frames)),
+          let channel = buffer.floatChannelData?[0] else {
+        throw NSError(domain: "StillAssets", code: 7, userInfo: [NSLocalizedDescriptionKey: "Unable to allocate alert-sound buffer."])
+    }
+    let scale = peakTarget / peak
+    for index in samples.indices { channel[index] = samples[index] * scale }
+    buffer.frameLength = AVAudioFrameCount(frames)
+    try file.write(from: buffer)
+    return peakTarget
+}
+
+func pianoVoice(t: Float, onset: Float, frequency: Float, amplitude: Float) -> Float {
+    let local = t - onset
+    guard local >= 0 else { return 0 }
+    let body =
+        0.84 * sine(frequency, local, phase: 0.14) * exp(-local / 0.88) +
+        0.25 * sine(frequency * 2.002, local, phase: 0.70) * exp(-local / 0.42) +
+        0.10 * sine(frequency * 3.012, local, phase: 1.17) * exp(-local / 0.25) +
+        0.04 * sine(frequency * 4.08, local, phase: 2.02) * exp(-local / 0.16) +
+        0.07 * sine(frequency * 0.5, local, phase: 0.30) * exp(-local / 0.57)
+    return amplitude * attack(local, over: 0.011) * body
+}
+
+func kalimbaVoice(t: Float, onset: Float, frequency: Float, amplitude: Float) -> Float {
+    let local = t - onset
+    guard local >= 0 else { return 0 }
+    let tine =
+        0.82 * sine(frequency, local, phase: 0.28) * exp(-local / 0.58) +
+        0.20 * sine(frequency * 2.73, local, phase: 1.32) * exp(-local / 0.20) +
+        0.08 * sine(frequency * 4.14, local, phase: 2.24) * exp(-local / 0.11)
+    let wood = 0.09 * sine(frequency * 0.51, local, phase: 0.54) * exp(-local / 0.32)
+    return amplitude * attack(local, over: 0.006) * (tine + wood)
+}
+
+func glassVoice(t: Float, onset: Float, frequency: Float, amplitude: Float) -> Float {
+    let local = t - onset
+    guard local >= 0 else { return 0 }
+    let bell =
+        0.78 * sine(frequency, local, phase: 0.08) * exp(-local / 1.20) +
+        0.22 * sine(frequency * 2.756, local, phase: 0.91) * exp(-local / 0.67) +
+        0.10 * sine(frequency * 5.404, local, phase: 1.78) * exp(-local / 0.38) +
+        0.04 * sine(frequency * 8.933, local, phase: 2.42) * exp(-local / 0.20)
+    return amplitude * attack(local, over: 0.015) * bell
+}
+
+func createAlertSounds() throws -> [(String, Float)] {
+    let pianoDuration: Float = 1.80
+    let pianoPeak = try writeAlertSound(to: feltPianoURL, duration: pianoDuration, peakTarget: 0.50) { time in
+        let notes =
+            pianoVoice(t: time, onset: 0.000, frequency: 523.251, amplitude: 0.92) + // C5
+            pianoVoice(t: time, onset: 0.170, frequency: 659.255, amplitude: 0.66) + // E5
+            pianoVoice(t: time, onset: 0.335, frequency: 783.991, amplitude: 0.52)   // G5
+        return notes * release(time, duration: pianoDuration)
+    }
+
+    let kalimbaDuration: Float = 1.45
+    let kalimbaPeak = try writeAlertSound(to: kalimbaURL, duration: kalimbaDuration, peakTarget: 0.48) { time in
+        let notes =
+            kalimbaVoice(t: time, onset: 0.000, frequency: 440.000, amplitude: 0.90) + // A4
+            kalimbaVoice(t: time, onset: 0.145, frequency: 523.251, amplitude: 0.60)   // C5
+        return notes * release(time, duration: kalimbaDuration)
+    }
+
+    let glassDuration: Float = 2.25
+    let glassPeak = try writeAlertSound(to: glassURL, duration: glassDuration, peakTarget: 0.47) { time in
+        let notes =
+            glassVoice(t: time, onset: 0.000, frequency: 1_174.659, amplitude: 0.90) + // D6
+            glassVoice(t: time, onset: 0.120, frequency: 1_567.982, amplitude: 0.24)   // G6
+        return notes * release(time, duration: glassDuration, over: 0.050)
+    }
+
+    let woodDuration: Float = 0.55
+    let woodPeak = try writeAlertSound(to: woodURL, duration: woodDuration, peakTarget: 0.43) { time in
+        let tap =
+            0.72 * sine(218, time, phase: 0.30) * exp(-time / 0.105) +
+            0.24 * sine(536, time, phase: 1.12) * exp(-time / 0.050) +
+            0.08 * sine(1_390, time, phase: 2.46) * exp(-time / 0.020)
+        return attack(time, over: 0.004) * tap * release(time, duration: woodDuration)
+    }
+    return [
+        ("StillFeltPiano.aiff", pianoPeak),
+        ("StillKalimba.aiff", kalimbaPeak),
+        ("StillGlass.aiff", glassPeak),
+        ("StillWood.aiff", woodPeak)
+    ]
+}
+
 do {
-    try createIcon()
-    let peak = try createChime()
-    print("Generated AppIcon.png (1024×1024), AppIcon.icns, and StillChime.aiff (44.1 kHz PCM 16-bit, peak \(String(format: "%.4f", peak))).")
+    if !CommandLine.arguments.dropFirst().contains("--alert-sounds") {
+        try createIcon()
+        let peak = try createChime()
+        print("Generated AppIcon.png (1024×1024), AppIcon.icns, and StillChime.aiff (44.1 kHz PCM 16-bit, peak \(String(format: "%.4f", peak))).")
+    }
+    let sounds = try createAlertSounds()
+    let summary = sounds.map { "\($0.0) (peak \(String(format: "%.2f", $0.1)))" }.joined(separator: ", ")
+    print("Generated alert sounds: \(summary).")
 } catch {
     fputs("Asset generation failed: \(error.localizedDescription)\n", stderr)
     exit(1)

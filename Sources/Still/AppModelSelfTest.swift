@@ -22,6 +22,7 @@ enum AppModelSelfTest {
             testCompletedFocusPersistsOnce(in: root.appendingPathComponent("completed", isDirectory: true), recorder: &recorder)
             testFocusWebsites(in: root.appendingPathComponent("focus-websites"), recorder: &recorder)
             testFocusCompletionAlert(in: root.appendingPathComponent("completion-alert", isDirectory: true), recorder: &recorder)
+            try testAlertTones(in: root.appendingPathComponent("alert-tones"), recorder: &recorder)
             testCustomDurationsAndSettings(in: root.appendingPathComponent("settings", isDirectory: true), recorder: &recorder)
             testPauseAndResetDoNotArchive(in: root.appendingPathComponent("cancelled", isDirectory: true), recorder: &recorder)
             testRepeatedTicksAreIdempotent(in: root.appendingPathComponent("idempotence", isDirectory: true), recorder: &recorder)
@@ -43,7 +44,7 @@ enum AppModelSelfTest {
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 19 test groups")
+            print("AppModel self-test passed: 20 test groups")
             return 0
         }
 
@@ -52,6 +53,41 @@ enum AppModelSelfTest {
             print("FAIL: \(failure)")
         }
         return 1
+    }
+
+    private static func testAlertTones(in directory: URL, recorder: inout Recorder) throws {
+        let decoder = JSONDecoder()
+        let legacy = try decoder.decode(Preferences.self, from: Data("{}".utf8))
+        recorder.check(legacy.timerTone == .stillChime && legacy.inactivityTone == .tink,
+                       "sounds: an existing setup keeps its original timer and inactivity cues")
+        let unknown = try decoder.decode(Preferences.self, from:
+            Data(#"{"timerTone":"removed","inactivityTone":"glass","soundEnabled":false}"#.utf8))
+        recorder.check(unknown.timerTone == .stillChime && unknown.inactivityTone == .glass && !unknown.soundEnabled,
+                       "sounds: an unknown tone preserves the other sound and mute setting")
+        for tone in AlertTone.allCases {
+            recorder.check((tone.loadSound()?.duration ?? 0) > 0, "sounds: can load " + tone.displayName)
+        }
+        recorder.check(AlertTone.timerChoices.allSatisfy { $0.notificationSound != nil },
+                       "sounds: every timer choice can be scheduled in a notification")
+
+        var played: [AlertTone] = []
+        let model = AppModel(dataDirectory: directory, syncJournalOnLaunch: false, playTone: { played.append($0) })
+        model.preferences.notificationsEnabled = false
+        model.preferences.inactivityTone = .wood
+        model.startFocus(minutes: 1)
+        model.preferences.timerTone = .feltPiano
+        model.savePreferences()
+        guard let focusDeadline = model.timer.deadline else { recorder.fail("sounds: focus did not start"); return }
+        model.advance(to: focusDeadline)
+        model.advance(to: focusDeadline.addingTimeInterval(1))
+        recorder.check(played == [.feltPiano], "sounds: a running focus uses the latest choice exactly once")
+        model.startBreak(.shortBreak)
+        guard let breakDeadline = model.timer.deadline else { recorder.fail("sounds: break did not start"); return }
+        model.advance(to: breakDeadline)
+        recorder.check(played == [.feltPiano, .feltPiano], "sounds: a break ends with the selected timer tone")
+        let restored = AppModel(dataDirectory: directory, syncJournalOnLaunch: false)
+        recorder.check(restored.preferences.timerTone == .feltPiano && restored.preferences.inactivityTone == .wood,
+                       "sounds: timer and inactivity choices restore independently")
     }
 
     private static func testStayAwake(in directory: URL, recorder: inout Recorder) {

@@ -11,6 +11,8 @@ struct Preferences: Codable {
     var shortBreakMinutes: Int
     var longBreakMinutes: Int
     var soundEnabled: Bool
+    var timerTone: AlertTone
+    var inactivityTone: AlertTone
     var notificationsEnabled: Bool
     var floatOnTop: Bool
     var theme: String
@@ -32,6 +34,8 @@ struct Preferences: Codable {
         shortBreakMinutes: Int = 5,
         longBreakMinutes: Int = 15,
         soundEnabled: Bool = true,
+        timerTone: AlertTone = .stillChime,
+        inactivityTone: AlertTone = .tink,
         notificationsEnabled: Bool = true,
         floatOnTop: Bool = true,
         theme: String = "system",
@@ -52,6 +56,8 @@ struct Preferences: Codable {
         self.shortBreakMinutes = Self.clamp(shortBreakMinutes, to: 1...60)
         self.longBreakMinutes = Self.clamp(longBreakMinutes, to: 1...90)
         self.soundEnabled = soundEnabled
+        self.timerTone = Self.normalizedTimerTone(timerTone)
+        self.inactivityTone = inactivityTone
         self.notificationsEnabled = notificationsEnabled
         self.floatOnTop = floatOnTop
         self.theme = Self.normalizedTheme(theme)
@@ -74,6 +80,8 @@ struct Preferences: Codable {
         case shortBreakMinutes
         case longBreakMinutes
         case soundEnabled
+        case timerTone
+        case inactivityTone
         case notificationsEnabled
         case floatOnTop
         case theme
@@ -99,6 +107,8 @@ struct Preferences: Codable {
             shortBreakMinutes: try container.decodeIfPresent(Int.self, forKey: .shortBreakMinutes) ?? defaults.shortBreakMinutes,
             longBreakMinutes: try container.decodeIfPresent(Int.self, forKey: .longBreakMinutes) ?? defaults.longBreakMinutes,
             soundEnabled: try container.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? defaults.soundEnabled,
+            timerTone: (try? container.decode(AlertTone.self, forKey: .timerTone)) ?? defaults.timerTone,
+            inactivityTone: (try? container.decode(AlertTone.self, forKey: .inactivityTone)) ?? defaults.inactivityTone,
             notificationsEnabled: try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? defaults.notificationsEnabled,
             floatOnTop: try container.decodeIfPresent(Bool.self, forKey: .floatOnTop) ?? defaults.floatOnTop,
             theme: try container.decodeIfPresent(String.self, forKey: .theme) ?? defaults.theme,
@@ -123,6 +133,8 @@ struct Preferences: Codable {
         try container.encode(shortBreakMinutes, forKey: .shortBreakMinutes)
         try container.encode(longBreakMinutes, forKey: .longBreakMinutes)
         try container.encode(soundEnabled, forKey: .soundEnabled)
+        try container.encode(Self.normalizedTimerTone(timerTone), forKey: .timerTone)
+        try container.encode(inactivityTone, forKey: .inactivityTone)
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
         try container.encode(floatOnTop, forKey: .floatOnTop)
         try container.encode(Self.normalizedTheme(theme), forKey: .theme)
@@ -144,6 +156,7 @@ struct Preferences: Codable {
         focusPresets = Self.normalizedFocusPresets(focusPresets)
         shortBreakMinutes = Self.clamp(shortBreakMinutes, to: 1...60)
         longBreakMinutes = Self.clamp(longBreakMinutes, to: 1...90)
+        timerTone = Self.normalizedTimerTone(timerTone)
         theme = Self.normalizedTheme(theme)
         colorTheme = Self.normalizedColorTheme(colorTheme)
         edgeStyle = Self.normalizedEdgeStyle(edgeStyle)
@@ -170,6 +183,10 @@ struct Preferences: Codable {
         case "sage", "clay", "dusk": return "system"
         default: return "system"
         }
+    }
+
+    private static func normalizedTimerTone(_ tone: AlertTone) -> AlertTone {
+        tone.resourceName == nil ? .stillChime : tone
     }
 
     private static func normalizedColorTheme(_ value: String) -> String {

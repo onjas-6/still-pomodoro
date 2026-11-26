@@ -11,7 +11,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/Still" "$app/Contents/MacOS/Still"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 cp Resources/FocusWebsites.txt "$app/Contents/Resources/"
-cp Resources/StillChime.aiff "$app/Contents/Resources/StillChime.aiff"
+cp Resources/Still*.aiff "$app/Contents/Resources/"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 codesign --force --deep --sign "${CODE_SIGN_IDENTITY:--}" "$app"
 # Install to the destination (default /Applications) and remove the build copy

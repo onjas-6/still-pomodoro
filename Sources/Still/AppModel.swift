@@ -41,7 +41,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @Published private(set) var journalIsBusy = false
     var onWindowPreferencesChanged: (() -> Void)?
     private var pulse: AnyCancellable?
-    private var sound: NSSound?
+    let playTone: (AlertTone) -> Void
     private var notificationGeneration = 0
     private var hasNotificationPermission = false
     private var systemChimeScheduled = false
@@ -60,7 +60,9 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     let inspiration: InspirationStore
     let stayAwake: StayAwake
 
-    init(dataDirectory: URL? = nil, preview: Bool = false, syncJournalOnLaunch: Bool = true) {
+    init(dataDirectory: URL? = nil, preview: Bool = false, syncJournalOnLaunch: Bool = true,
+         playTone: @escaping (AlertTone) -> Void = AlertTonePlayer().play) {
+        self.playTone = playTone
         isPreview = preview
         managesSystemNotifications = !preview && dataDirectory == nil
         dataURL = (dataDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -229,11 +231,11 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
                 focusCompletionAlertActive = true
                 // Focus timer notifications stay silent while Still is running, so
                 // this bundled chime is the one audible completion signal.
-                if shouldPlayDirectChime(for: .focus) { playChime() }
+                if shouldPlayDirectChime(for: .focus) { playTone(preferences.timerTone) }
             } else if preferences.soundEnabled && !systemChimeScheduled {
                 // Preserve the existing break behavior when its notification was not
                 // scheduled (for example, notifications are unavailable).
-                playChime()
+                playTone(preferences.timerTone)
             }
         }
     }
@@ -490,12 +492,6 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     func showJournalInFinder() {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: preferences.journalPath)])
     }
-    func playChime() {
-        guard let url = Bundle.main.url(forResource: "StillChime", withExtension: "aiff") else { return }
-        sound?.stop()
-        sound = NSSound(contentsOf: url, byReference: false)
-        sound?.play()
-    }
     func enableNotifications() {
         Task {
             do { _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
@@ -538,11 +534,11 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             let content = UNMutableNotificationContent()
             content.title = mode == .focus ? "A moment, well spent." : "Ready for a fresh start?"
             content.body = mode == .focus ? "Your focus session is complete. Take a slow breath and a little break." : "Your break is over. Come back to one thing that matters."
-            // A running focus timer plays the bundled chime itself at the live
+            // A running focus timer plays the selected tone itself at the live
             // transition. Leave its notification silent to prevent two chimes.
             // Breaks retain their existing system-notification sound behavior.
             let usesSystemChime = soundEnabled && mode != .focus
-            if usesSystemChime { content.sound = UNNotificationSound(named: UNNotificationSoundName("StillChime.aiff")) }
+            if usesSystemChime { content.sound = preferences.timerTone.notificationSound }
             let id = "still.timer"
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, deadline.timeIntervalSinceNow), repeats: false)
             do {
@@ -567,7 +563,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         let content = UNMutableNotificationContent()
         content.title = "A moment, well spent."
         content.body = "Your focus session is complete. Take a slow breath and a little break."
-        content.sound = UNNotificationSound(named: UNNotificationSoundName("StillChime.aiff"))
+        content.sound = preferences.timerTone.notificationSound
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, deadline.timeIntervalSinceNow), repeats: false)
         let request = UNNotificationRequest(identifier: "still.timer", content: content, trigger: trigger)
         let accepted = DispatchSemaphore(value: 0)
