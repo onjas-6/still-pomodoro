@@ -24,7 +24,7 @@ public enum MarkdownJournalError: Error, Equatable, LocalizedError, Sendable {
         case .notWritable:
             return "The Still journal file is not writable."
         case .malformedMetadata:
-            return "The Still journal contains malformed session metadata."
+            return "The Still journal contains malformed Still metadata."
         case .lockUnavailable:
             return "The Still journal is busy and could not be locked for writing."
         }
@@ -36,31 +36,39 @@ public enum MarkdownJournalError: Error, Equatable, LocalizedError, Sendable {
 /// Each generated row embeds the canonical session as base64 JSON in an HTML comment.
 /// Markdown outside those comments is never parsed as session data or rewritten.
 public enum MarkdownJournal {
-    private static let header = "# Focus sessions\n\nCompleted focus sessions, recorded locally by Still.\n"
+    private static let header = "# Focus sessions\n\nDeep work goals and sessions, recorded locally by Still.\n"
     private static let markerPrefix = "<!-- still-session:"
+    private static let eventPrefix = "<!-- still-day:"
     private static let markerSuffix = "-->"
 
-    /// Reads all session rows embedded in a journal, preserving their document order.
     public static func read(from url: URL) throws -> [FocusSession] {
-        try validateJournalURL(url, requireExistingFile: true)
-        let contents = try String(contentsOf: url, encoding: .utf8)
-        return try sessions(in: contents)
+        try readEntries(from: url).sessions
     }
 
-    /// Creates a journal when necessary, then appends only sessions whose IDs are not
-    /// already represented by valid Still metadata in the document.
-    public static func synchronize(sessions newSessions: [FocusSession], to url: URL) throws {
+    public static func readEntries(from url: URL) throws -> JournalEntries {
+        try validateJournalURL(url, requireExistingFile: true)
+        return try entries(in: String(contentsOf: url, encoding: .utf8))
+    }
+
+    public static func synchronize(sessions: [FocusSession], to url: URL) throws {
+        _ = try synchronize(JournalEntries(sessions: sessions), to: url)
+    }
+
+    /// Read, merge and append under the same lock so a concurrent writer's rows
+    /// also reach the caller's cache. User-authored Markdown is never rewritten.
+    public static func synchronize(_ incoming: JournalEntries, to url: URL) throws -> JournalEntries {
         try validateJournalURL(url, requireExistingFile: false)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-        try withLockedJournal(at: url) { handle, created in
+        return try withLockedJournal(at: url) { handle, created in
             let contents = try readContents(from: handle)
-            let existingSessions = try sessions(in: contents)
-            var knownIDs = Set(existingSessions.map(\.id))
-            let missing = newSessions.filter { knownIDs.insert($0.id).inserted }
-            guard !missing.isEmpty else { return }
+            var existing = try entries(in: contents)
+            let missing = incoming.missing(from: existing)
+            guard !missing.isEmpty else { return existing }
 
-            let rows = try missing.map { try row(for: $0) }.joined(separator: "\n") + "\n"
+            let sessionRows = try missing.sessions.map { ($0.completedAt, try row(for: $0)) }
+            let eventRows = try missing.events.map { ($0.date, try row(for: $0)) }
+            let rows = (sessionRows + eventRows).sorted { $0.0 < $1.0 }.map(\.1).joined(separator: "\n") + "\n"
             let separator: String
             if created || contents == header {
                 separator = "\n"
@@ -70,6 +78,8 @@ public enum MarkdownJournal {
                 separator = "\n"
             }
             try append(Data((separator + rows).utf8), to: handle)
+            existing.append(missing)
+            return existing
         }
     }
 
@@ -185,11 +195,21 @@ public enum MarkdownJournal {
         }
     }
 
-    private static func sessions(in contents: String) throws -> [FocusSession] {
-        var result: [FocusSession] = []
+    private static func entries(in contents: String) throws -> JournalEntries {
+        let events: [DailyEvent] = try records(in: contents, prefix: eventPrefix)
+        for event in events {
+            if case let .goal(count) = event.kind, !DailyEvent.goalRange.contains(count) {
+                throw MarkdownJournalError.malformedMetadata
+            }
+        }
+        return try JournalEntries(sessions: records(in: contents, prefix: markerPrefix), events: events)
+    }
+
+    private static func records<Record: Decodable>(in contents: String, prefix: String) throws -> [Record] {
+        var result: [Record] = []
         var searchRange = contents.startIndex..<contents.endIndex
 
-        while let markerRange = contents.range(of: markerPrefix, options: [], range: searchRange) {
+        while let markerRange = contents.range(of: prefix, options: [], range: searchRange) {
             let metadataStart = markerRange.upperBound
             guard let endingRange = contents.range(of: markerSuffix, options: [], range: metadataStart..<contents.endIndex) else {
                 throw MarkdownJournalError.malformedMetadata
@@ -198,14 +218,31 @@ public enum MarkdownJournal {
             let encoded = contents[metadataStart..<endingRange.lowerBound]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard let data = Data(base64Encoded: encoded),
-                  let session = try? JSONDecoder().decode(FocusSession.self, from: data) else {
+                  let record = try? JSONDecoder().decode(Record.self, from: data) else {
                 throw MarkdownJournalError.malformedMetadata
             }
-            result.append(session)
+            result.append(record)
             searchRange = endingRange.upperBound..<contents.endIndex
         }
 
         return result
+    }
+
+    private static func row(for event: DailyEvent) throws -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = event.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm zzz"
+        let time = formatter.string(from: event.date)
+        let detail: String
+        switch event.kind {
+        case let .goal(count):
+            detail = count == 0 ? "Rest day · goal 0" : "Deep work goal · **\(count) session\(count == 1 ? "" : "s")**"
+        case let .stopped(startedAt):
+            detail = "Focus stopped early · started \(formatter.string(from: startedAt))"
+        }
+        let metadata = try JSONEncoder().encode(event).base64EncodedString()
+        return "- **\(time)** · \(detail) \(eventPrefix)\(metadata) -->"
     }
 
     private static func row(for session: FocusSession) throws -> String {
@@ -215,8 +252,9 @@ public enum MarkdownJournal {
     }
 
     private static func sessionDisplay(_ session: FocusSession) -> (timeRange: String, duration: String) {
-        let calendar = Calendar.current
-        let zone = TimeZone.current
+        let zone = session.timeZone ?? .current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
         let zoneLabel = zone.abbreviation(for: session.startedAt) ?? zone.identifier
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")

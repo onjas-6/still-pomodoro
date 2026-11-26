@@ -15,8 +15,8 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
 - **A little sense of time.** A fine sage progress line fills as the session elapses; it dims when paused.
 - **Gentle motion.** The panel opens around the countdown, with a soft control reveal.
   Rapid reversals stay smooth, and macOS Reduce Motion is respected.
-- **Quiet while you work.** Click the desktop or press Esc to collapse. Hovering
-  does not open anything. Drag the digits to move the timer.
+- **Quiet while you work.** Click the desktop or press Esc to collapse. Hover over the
+  compact timer for today’s completed sessions and goal. Drag the digits to move it.
 - **Adjustable.** Scale the compact timer from 80% to 300% (up to 384 × 156 points)
   and change background opacity in Preferences.
 - **Follows your Mac.** System light/dark mode by default, with manual overrides.
@@ -25,8 +25,11 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
 - **Soften the edge.** Switch between frosted **Glass** and **Diffuse**, a translucent
   color wash that fades into the desktop. Digits stay sharp; Diffuse removes the native
   window shadow. Reduce Transparency uses a solid surface for readability.
-- **Your sessions, in Markdown.** Pick an existing `.md` file or a new path. Still
-  appends completed focus sessions, preserving your notes and avoiding duplicates.
+- **Daily Overview.** Set a deep work goal on the first open of the day. The compact timer
+  shows progress on hover. Open **Daily Overview** from the controls or menu-bar leaf to
+  edit today’s plan or expand any recorded day to see session times, early stops and goal changes.
+- **Your sessions, in Markdown.** Still appends daily goals and focus activity to a local
+  journal. You can choose an existing `.md` file and keep your notes alongside the records.
 - **Focus completion.** Your selected timer sound plays when a focus timer ends. A high-contrast
   completion panel stays visible until you dismiss it or start your break, including when muted.
 - **macOS Focus.** In Preferences, you can connect a pair of Apple shortcuts to open a
@@ -127,18 +130,40 @@ session is reconciled on the next launch. The live focus chime follows Still’s
 switch and the Mac’s output volume. Notifications delivered by macOS follow its Focus
 and notification settings. During sleep the Mac can play a sound only after waking.
 
+## Daily goals
+
+The first time you open Still or expand its controls each local day, choose how many
+deep work sessions you can fit. The planner starts at two sessions and shows the time
+that would take at your default focus duration. It suggests your most recent positive
+goal on subsequent days. Choose zero to plan a rest day, or **Not now** to skip the
+prompt for the day. You can return through **Daily Overview → Set daily goal…**.
+
+**View today in Todoist** opens your Today list in the desktop app or browser, so you can
+check the work you have planned before committing. Still counts a session when the focus
+timer reaches its deadline. A pause keeps the same session. Resetting a running or paused
+focus timer records its early stop. Breaks never count toward the goal.
+
+The overview groups each focus session by its local completion date. Each prior planned
+day shows how many sessions you finished and whether you met the goal, including days
+with zero completions. A day with activity and no commitment is marked **No goal set**.
+Select a day to see its timeline.
+
 ## Your data
 
-The default journal destination is `~/Documents/Still-sessions.md`. You can place
-it anywhere writable, including your own notes folder. Existing Markdown content is
-preserved. Each entry includes a readable local timestamp, timezone, duration, and
-an invisible session identifier for reliable synchronization.
+On a Mac with a Desktop **MySpace** folder, the default journal is
+`~/Desktop/MySpace/Life/Still/Deep Work.md`. A Finder alias or symbolic link to
+MySpace works as well. Macs without MySpace default to `~/Documents/Still-sessions.md`.
+When upgrading from the old Documents default, Still imports its records into MySpace.
+A custom journal path is kept. To move the records explicitly, choose **Preferences →
+Markdown journal → Use Desktop MySpace**.
+
+Each entry has a readable timestamp and a hidden identifier. A second Mac can rebuild
+the overview from the shared Markdown alone. Opening the overview refreshes it from disk.
+Your folder’s sync provider determines when another Mac's changes become available.
 
 A small recovery cache at `~/Library/Application Support/Still/state.json` keeps the
-active timer, preferences, and sessions so a failed Markdown write does not lose your
-work. Journal reads and writes run in the background, so a slow or unavailable notes
-folder never pauses the timer or blocks the window. The app shows write errors and retries on launch or when the path is saved
-again. Changing the journal path preserves existing contents and carries your session
+active timer, preferences, commitments, and session history for recovery. Journal reads and writes run in the background, so a slow or unavailable notes
+folder never pauses the timer or blocks the window. The app shows write errors and retries on launch, on opening Daily Overview, or when you save the path again. Changing the journal path preserves existing contents and carries your session
 history into the selected file. Keep hidden Still metadata comments if you edit the
 journal, so the app can recognize entries and avoid duplicating them.
 

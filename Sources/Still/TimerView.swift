@@ -24,6 +24,7 @@ struct TimerView: View {
     var showSettings: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @StoredViewState private var hovering = false
+    @StoredViewState private var compactHovering = false
     private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme, colorTheme: model.preferences.colorTheme) }
     private var expansion: CGFloat { panelState.expansion }
     private var hasProgress: Bool { model.timer.phase != .ready }
@@ -32,14 +33,24 @@ struct TimerView: View {
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
+            let showGoal = compactHovering && !panelState.expanded && expansion == 0
             let scale = model.preferences.compactScale
             // The time is a single persistent view; the surface opens around it.
             // Controls reveal only after there is room, so they never squeeze into the pill.
             let reveal = max(0, min(1, (expansion - 0.40) / 0.60))
             ZStack(alignment: .topLeading) {
-                digits(size: blend(34 * scale, 36))
+                digits(size: blend((showGoal ? 27 : 34) * scale, 36))
                     .opacity(model.timer.phase == .paused ? 0.65 : 1)
-                    .position(x: size.width / 2, y: blend(size.height / 2 - (hasProgress ? 3 : 0), 35))
+                    .position(x: size.width / 2, y: blend(showGoal ? 17 * scale : size.height / 2 - (hasProgress ? 3 : 0), 35))
+
+                if showGoal {
+                    Text(model.today.hoverText)
+                        .font(.system(size: 10 * scale, weight: .medium)).monospacedDigit()
+                        .foregroundStyle(palette.ink).lineLimit(1).minimumScaleFactor(0.8)
+                        .frame(width: size.width - 14 * scale)
+                        .position(x: size.width / 2, y: (hasProgress ? 35 : 37) * scale)
+                        .allowsHitTesting(false)
+                }
 
                 QuietProgress(progress: model.progress, paused: model.timer.phase == .paused, palette: palette)
                     .frame(width: max(1, blend(size.width - 30 * scale, size.width - 36)), height: blend(1.6, 2))
@@ -59,9 +70,10 @@ struct TimerView: View {
                 .accessibilityHidden(!panelState.expanded)
 
                 if !panelState.expanded && expansion == 0 {
-                    CompactInteraction(action: toggleExpanded, time: "\(model.remaining / 60) minutes, \(model.remaining % 60) seconds remaining")
+                    CompactInteraction(action: toggleExpanded, onHover: { compactHovering = $0 }, time: "\(model.remaining / 60) minutes, \(model.remaining % 60) seconds remaining. \(model.today.hoverText)")
                         .frame(width: size.width, height: size.height)
-                        .help("Click for controls · drag to move")
+                        .onDisappear { compactHovering = false }
+                        .help("\(model.today.hoverText) · Click for controls · drag to move")
                 }
             }
             .frame(width: size.width, height: size.height)
@@ -150,10 +162,7 @@ struct TimerView: View {
                 }
             }
             HStack(spacing: 12) {
-                if model.isInProgress {
-                    Button("\(model.todaySessions.count) today", action: showHistory)
-                        .font(.system(size: 10)).buttonStyle(QuietButtonStyle())
-                } else {
+                if !model.isInProgress {
                     Menu {
                         Button("Short rest · \(model.preferences.shortBreakMinutes) min") { startBreak(.shortBreak) }
                         Button("Long rest · \(model.preferences.longBreakMinutes) min") { startBreak(.longBreak) }
@@ -165,8 +174,9 @@ struct TimerView: View {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
                         .help(model.journalError ?? model.storageError ?? "")
                 }
-                Button(action: showHistory) { Image(systemName: "clock.arrow.circlepath").font(.system(size: 11)).frame(width: 19, height: 20) }
-                    .buttonStyle(QuietButtonStyle()).help("Session history").accessibilityLabel("Session history")
+                Button(action: showHistory) {
+                    Label("Daily overview", systemImage: "calendar").font(.system(size: 10))
+                }.buttonStyle(QuietButtonStyle()).help(model.today.hoverText)
                 Button(action: showSettings) { Image(systemName: "slider.horizontal.3").font(.system(size: 11)).frame(width: 19, height: 20) }
                     .buttonStyle(QuietButtonStyle()).help("Preferences").accessibilityLabel("Preferences")
             }.foregroundStyle(palette.secondary).frame(height: 20).padding(.top, 2)
@@ -345,10 +355,12 @@ struct GlassBackground: NSViewRepresentable {
 
 struct CompactInteraction: NSViewRepresentable {
     var action: () -> Void
+    var onHover: (Bool) -> Void
     var time: String
     func makeNSView(context: Context) -> CompactHitView { CompactHitView() }
     func updateNSView(_ view: CompactHitView, context: Context) {
         view.action = action
+        view.onHover = onHover
         view.setAccessibilityLabel("Show timer controls")
         view.setAccessibilityValue(time)
         view.setAccessibilityHelp("Click to expand. Drag to move the timer.")
@@ -356,6 +368,8 @@ struct CompactInteraction: NSViewRepresentable {
 }
 final class CompactHitView: NSView {
     var action: (() -> Void)?
+    var onHover: ((Bool) -> Void)?
+    private var hoverArea: NSTrackingArea?
     private var initialPoint = NSPoint.zero
     private var mouseDownEvent: NSEvent?
     private var dragged = false
@@ -371,6 +385,17 @@ final class CompactHitView: NSView {
         setAccessibilityRole(.button)
     }
     required init?(coder: NSCoder) { super.init(coder: coder) }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard hoverArea == nil else { return }
+        // The timer is usually hovered while a different app owns the key window.
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .inVisibleRect, .activeAlways],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
     override func accessibilityPerformPress() -> Bool { action?(); return true }
     override func mouseDown(with event: NSEvent) {
         // Event coordinates stay consistent even when queued input is delivered

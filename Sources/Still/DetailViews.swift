@@ -111,6 +111,12 @@ struct PreferencesView: View {
                 if !model.journalDisplayPath.isEmpty {
                     Text(model.journalDisplayPath).font(.system(size: 10)).foregroundStyle(palette.secondary).lineLimit(1).truncationMode(.middle)
                 }
+                if model.preferences.journalPath != JournalLocation.mySpaceJournal.path {
+                    Button("Use Desktop MySpace") {
+                        journalPathDraft = JournalLocation.mySpaceJournal.path
+                        saveJournalPath()
+                    }.controlSize(.small)
+                }
                 if model.journalIsBusy {
                     Text("Updating Markdown…").font(.system(size: 10)).foregroundStyle(palette.secondary)
                 }
@@ -356,78 +362,105 @@ private struct StayAwakePreferences: View {
 
 struct HistoryView: View {
     @ObservedObject var model: AppModel
+    var editGoal: () -> Void
     @StoredViewState private var exportError: String? = nil
+    @StoredViewState private var expandedDays: Set<String> = []
     @Environment(\.colorScheme) private var colorScheme
     private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme, colorTheme: model.preferences.colorTheme) }
-    private var days: [Date] { (0..<7).reversed().compactMap { Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: model.now)) } }
-    private func count(_ day: Date) -> Int { model.sessions.filter { Calendar.current.isDate($0.completedAt, inSameDayAs: day) }.count }
+    private var week: [Date] {
+        (0..<7).reversed().compactMap { Calendar.current.date(byAdding: .day, value: -$0, to: model.now) }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Time, well spent.").font(.system(size: 29, design: .serif))
-                    Text("Small beginnings add up.").font(.system(size: 12)).foregroundStyle(palette.secondary)
-                }
-                Spacer()
-                HStack(spacing: 12) {
-                    Button { model.openJournal() } label: { Image(systemName: "doc.text") }
-                        .buttonStyle(.plain).help("Open session journal")
-                    Button(action: export) { Image(systemName: "square.and.arrow.up") }
-                        .buttonStyle(.plain).help("Export session history as JSON")
-                }
-            }
-            HStack(spacing: 0) {
-                metric("\(model.todaySessions.count)", "TODAY")
-                metric("\(model.todayMinutes)m", "FOCUS TODAY")
-                metric("\(model.sessions.count)", "ALL SESSIONS")
-            }.padding(.vertical, 12)
-            HStack(alignment: .bottom, spacing: 18) {
-                ForEach(days, id: \.self) { day in
-                    VStack(spacing: 7) {
-                        Text(count(day) == 0 ? "" : "\(count(day))").font(.system(size: 10)).foregroundStyle(palette.secondary)
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Calendar.current.isDateInToday(day) ? palette.ink : palette.wash)
-                            .frame(height: max(3, 64 * CGFloat(count(day)) / CGFloat(max(1, days.map(count).max() ?? 1))))
-                        Text(day.formatted(.dateTime.weekday(.narrow))).font(.system(size: 10)).foregroundStyle(palette.secondary)
-                    }.frame(maxWidth: .infinity)
-                }
-            }.frame(height: 100, alignment: .bottom)
-            Divider()
-            if model.sessions.isEmpty {
-                VStack(spacing: 9) {
-                    Image(systemName: "leaf").font(.system(size: 25, weight: .ultraLight))
-                    Text("Your first quiet moment awaits.").font(.system(size: 14, design: .serif))
-                    Text("Completed focus sessions will appear here.").font(.system(size: 11)).foregroundStyle(palette.secondary)
-                }.frame(maxWidth: .infinity).frame(height: 125)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(model.sessions.sorted { $0.completedAt > $1.completedAt }) { session in
-                            HStack {
-                                Image(systemName: "checkmark.circle").foregroundStyle(palette.accent)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(session.completedAt.formatted(date: .abbreviated, time: .omitted)).font(.system(size: 12))
-                                    Text(session.startedAt.formatted(date: .omitted, time: .shortened)).font(.system(size: 10)).foregroundStyle(palette.secondary)
-                                }
-                                Spacer()
-                                Text("\(Int(session.duration / 60)) min").font(.system(size: 12, design: .rounded))
-                            }.padding(.vertical, 10)
-                            Divider().opacity(0.4)
-                        }
-                    }
-                }.frame(height: 165)
-            }
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("\(model.totalMinutes) focused minutes, all time").font(.system(size: 10)).foregroundStyle(palette.secondary)
+                Text("Daily Overview").font(.system(size: 29, design: .serif))
                 Spacer()
-                Image(systemName: "internaldrive").font(.system(size: 11)).foregroundStyle(palette.secondary)
+                Button { model.openJournal() } label: { Image(systemName: "doc.text") }
+                    .buttonStyle(.plain).help("Open Markdown journal").accessibilityLabel("Open Markdown journal")
+                Button(action: export) { Image(systemName: "square.and.arrow.up") }
+                    .buttonStyle(.plain).help("Export completed sessions as JSON").accessibilityLabel("Export completed sessions")
             }
+            HStack(spacing: 12) {
+                metric(model.today.progressText, "SESSIONS TODAY")
+                metric("\(model.today.minutes)m", "FOCUS TODAY")
+                Button(model.today.goal == nil ? "Set daily goal…" : "Edit goal…", action: editGoal)
+                    .controlSize(.small)
+            }
+            weekChart
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Set(model.days.keys).union([model.todayID]).sorted(by: >), id: \.self) { id in
+                        dayRow(model.days[id] ?? FocusDay(id: id))
+                        Divider().opacity(0.45)
+                    }
+                }
+            }.frame(minHeight: 120, maxHeight: .infinity)
+            if let error = model.journalError ?? model.storageError {
+                Text(error).font(.caption).foregroundStyle(.orange)
+            }
+            Text("\(model.sessions.count) sessions · \(model.totalMinutes) focused minutes, all time")
+                .font(.caption).foregroundStyle(palette.secondary)
         }
-        .padding(30).frame(width: 450).background(palette.background).foregroundStyle(palette.ink)
+        .padding(26).frame(width: 460, height: min(545, (NSScreen.main?.visibleFrame.height ?? 900) - 80))
+        .background(palette.background).foregroundStyle(palette.ink)
         .preferredColorScheme(model.preferences.preferredColorScheme())
+        .onAppear { expandedDays.insert(model.todayID) }
+        .onChange(of: model.todayID) { _, id in expandedDays.insert(id) }
         .alert("Could not export", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
             Button("OK") { exportError = nil }
         } message: { Text(exportError ?? "") }
+    }
+
+    private var weekChart: some View {
+        let days = week.map { date in
+            let id = DailyEvent.dayID(for: date)
+            return model.days[id] ?? FocusDay(id: id)
+        }
+        let peak = max(1, days.map(\.completed).max() ?? 1)
+        return HStack(alignment: .bottom, spacing: 12) {
+            ForEach(Array(zip(week, days)), id: \.1.id) { date, day in
+                VStack(spacing: 4) {
+                    Text(day.completed == 0 ? "" : "\(day.completed)").font(.caption2)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(day.id == model.todayID ? palette.ink : palette.wash)
+                        .frame(height: max(3, 32 * CGFloat(day.completed) / CGFloat(peak)))
+                    Text(date.formatted(.dateTime.weekday(.abbreviated))).font(.caption2)
+                }
+                .frame(maxWidth: .infinity)
+                .help("\(day.id) · \(day.progressText) · \(day.status(isToday: day.id == model.todayID))")
+            }
+        }.foregroundStyle(palette.secondary).frame(height: 68, alignment: .bottom)
+    }
+
+    private func dayRow(_ day: FocusDay) -> some View {
+        let today = day.id == model.todayID
+        let expanded = Binding(get: { expandedDays.contains(day.id) }, set: { show in
+            if show { expandedDays.insert(day.id) } else { expandedDays.remove(day.id) }
+        })
+        return DisclosureGroup(isExpanded: expanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                if day.activity.isEmpty {
+                    Text("No sessions recorded.").foregroundStyle(palette.secondary)
+                }
+                ForEach(day.activity) { item in
+                    HStack {
+                        Image(systemName: item.symbol).frame(width: 14)
+                        Text(item.detail)
+                        Spacer()
+                        Text(item.timeLabel).monospacedDigit().foregroundStyle(palette.secondary)
+                    }
+                }
+            }.font(.caption).padding(.vertical, 5)
+        } label: {
+            HStack {
+                Text(today ? "Today" : day.id).font(.system(size: 13, weight: .medium))
+                Spacer()
+                Text(day.progressText).monospacedDigit()
+                Text(day.status(isToday: today)).foregroundStyle(palette.secondary)
+            }.font(.caption)
+        }.padding(.vertical, 9)
     }
     private func metric(_ value: String, _ caption: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {

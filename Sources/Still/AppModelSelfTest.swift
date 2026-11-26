@@ -37,6 +37,8 @@ enum AppModelSelfTest {
             testJournalPathAppendAndRestore(in: root.appendingPathComponent("journal", isDirectory: true), recorder: &recorder)
             testLegacyPreferencesDecode(in: root.appendingPathComponent("legacy", isDirectory: true), recorder: &recorder)
             testBackgroundJournalImportAndCompletion(in: root.appendingPathComponent("journal-worker", isDirectory: true), recorder: &recorder)
+            try testDailyOverview(in: root.appendingPathComponent("daily"), recorder: &recorder)
+            try testMySpaceAlias(in: root.appendingPathComponent("alias"), recorder: &recorder)
             testLocalInspiration(in: root.appendingPathComponent("inspiration", isDirectory: true), recorder: &recorder)
             testQuietClock(in: root.appendingPathComponent("quiet-clock", isDirectory: true), recorder: &recorder)
             testRestReminder(in: root.appendingPathComponent("rest-reminder", isDirectory: true), recorder: &recorder)
@@ -46,7 +48,7 @@ enum AppModelSelfTest {
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 21 test groups")
+            print("AppModel self-test passed: 23 test groups")
             return 0
         }
 
@@ -748,6 +750,93 @@ enum AppModelSelfTest {
         } catch {
             recorder.fail("journal worker: fixture failed: \(error)")
         }
+    }
+
+    private static func testDailyOverview(in directory: URL, recorder: inout Recorder) throws {
+        let journal = directory.appendingPathComponent("plan.md")
+        let state = directory.appendingPathComponent("state")
+        let model = AppModel(dataDirectory: state, syncJournalOnLaunch: false)
+        prepareForTimerUse(model, focusMinutes: 1)
+        recorder.check(model.setJournalPath(journal.path), "daily: select shared journal")
+        recorder.check(model.suggestedGoal == 2 && model.takeDailyGoalPrompt(), "daily: first open offers two sessions")
+        let reopened = AppModel(dataDirectory: state, syncJournalOnLaunch: false)
+        recorder.check(!reopened.takeDailyGoalPrompt(), "daily: dismissing the prompt survives relaunch")
+        let midnight = Calendar.current.startOfDay(for: Date())
+        let yesterday = midnight.addingTimeInterval(-60)
+        model.setDailyGoal(3, at: yesterday)
+        model.advance(to: Date())
+        recorder.check(model.suggestedGoal == 3 && model.today.goal == nil, "daily: previous goal suggested but not committed")
+        recorder.check(model.days[DailyEvent.dayID(for: yesterday)]?.status(isToday: false) == "3 short",
+                       "daily: a planned day with zero completions remains in history")
+        model.setDailyGoal(3)
+        model.setDailyGoal(1)
+        model.startFocus(minutes: 1)
+        model.primaryAction() // Pause and resume the same interval.
+        model.primaryAction()
+        guard let deadline = model.timer.deadline else { recorder.fail("daily: no focus deadline"); return }
+        model.advance(to: deadline)
+        model.advance(to: deadline)
+        let completionDay = DailyEvent.dayID(for: deadline)
+        recorder.check(model.days[completionDay]?.completed == 1, "daily: resumed focus counts exactly once")
+        model.startBreak(.shortBreak)
+        if let end = model.timer.deadline { model.advance(to: end) }
+        model.startFocus(minutes: 1)
+        model.reset()
+        model.reset()
+        recorder.check(waitForJournal(model) && model.journalError == nil, "daily: background goal and timer writes finish")
+        let records = try MarkdownJournal.readEntries(from: journal)
+        recorder.check(records.sessions.count == 1 && records.events.count == 4,
+                       "daily: three commitments, one early stop, one completion and no breaks")
+        let fresh = AppModel(dataDirectory: directory.appendingPathComponent("second-mac"), syncJournalOnLaunch: false)
+        recorder.check(fresh.setJournalPath(journal.path), "daily: import the shared journal alone")
+        recorder.check(fresh.today.goal == 1 && !fresh.takeDailyGoalPrompt(), "daily: latest goal imports before the prompt")
+        recorder.check(fresh.days[completionDay]?.completed == 1, "daily: imported completion does not double count")
+        let copied = try String(contentsOf: journal, encoding: .utf8)
+        recorder.check(copied.contains("Deep work goal") && copied.contains("stopped early"), "daily: readable Markdown commitments and stops")
+
+        let broken = "<!-- still-day:broken -->"
+        try (copied + broken).write(to: journal, atomically: true, encoding: .utf8)
+        fresh.setDailyGoal(0)
+        recorder.check(waitForJournal(fresh) && fresh.journalError != nil, "daily: a failed journal write is visible")
+        let restored = AppModel(dataDirectory: directory.appendingPathComponent("second-mac"), syncJournalOnLaunch: false)
+        recorder.check(restored.today.goal == 0 && restored.today.status(isToday: true) == "Rest day", "daily: rest-day edit recovers offline")
+        try copied.write(to: journal, atomically: true, encoding: .utf8)
+        restored.synchronizeJournal()
+        recorder.check(waitForJournal(restored) && restored.journalError == nil, "daily: retry merges the cached edit")
+        recorder.check(try MarkdownJournal.readEntries(from: journal).events.count == 5, "daily: retry appends only the missing edit")
+
+        let zone = TimeZone(secondsFromGMT: -8 * 3600)!
+        let end = ISO8601DateFormatter().date(from: "2026-11-27T08:05:00Z")!
+        let acrossMidnight = FocusSession(id: UUID(), startedAt: end.addingTimeInterval(-1800),
+            completedAt: end, duration: 1800, timeZone: zone)
+        let days = FocusDay.history(JournalEntries(sessions: [acrossMidnight], events: [
+            DailyEvent(.goal(2), at: end.addingTimeInterval(-3600), timeZone: zone),
+            DailyEvent(.goal(1), at: end, timeZone: zone)
+        ]))
+        recorder.check(days["2026-11-26"]?.completed == 0 && days["2026-11-27"]?.status(isToday: false) == "Goal met",
+                       "daily: the recorded local completion day gets a session spanning midnight")
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: midnight)!
+        recorder.check(restored.takeDailyGoalPrompt(at: tomorrow) && !restored.takeDailyGoalPrompt(at: tomorrow),
+                       "daily: the next local day prompts exactly once")
+    }
+
+    private static func testMySpaceAlias(in directory: URL, recorder: inout Recorder) throws {
+        let fm = FileManager.default
+        let target = directory.appendingPathComponent("synced", isDirectory: true)
+        let alias = directory.appendingPathComponent("MySpace")
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        let bookmark = try target.bookmarkData(options: .suitableForBookmarkFile, includingResourceValuesForKeys: nil, relativeTo: nil)
+        try URL.writeBookmarkData(bookmark, to: alias)
+        let relative = "Life/Still/Deep Work.md"
+        let url = try JournalLocation.resolved(alias.appendingPathComponent(relative), mySpaceRoot: alias)
+        _ = try MarkdownJournal.synchronize(JournalEntries(events: [DailyEvent(.goal(2), at: Date())]), to: url)
+        recorder.check(try MarkdownJournal.readEntries(from: target.appendingPathComponent(relative)).events.count == 1,
+                       "daily: journal reaches the real folder behind a Finder alias")
+        let direct = try JournalLocation.resolved(target.appendingPathComponent(relative), mySpaceRoot: target)
+        recorder.check(direct.path == target.appendingPathComponent(relative).path, "daily: ordinary desktop directory resolves")
+        let missing = directory.appendingPathComponent("missing")
+        recorder.check((try? JournalLocation.resolved(missing.appendingPathComponent(relative), mySpaceRoot: missing)) == nil,
+                       "daily: a missing MySpace is not recreated as a disconnected directory")
     }
 
     private static func testLocalInspiration(in directory: URL, recorder: inout Recorder) {

@@ -11,8 +11,12 @@ enum WindowSelfTest {
         panel: NSPanel,
         setScale: (Double) -> Void,
         setExpanded: (Bool) -> Void,
-        flushPreferences: () -> Void
+        flushPreferences: () -> Void,
+        model: AppModel,
+        showPlanner: () -> NSWindow?,
+        showOverview: () -> NSWindow?
     ) async -> Int32 {
+        precondition(model.isPreview)
         var failures: [String] = []
 
         guard let screen = NSScreen.main ?? panel.screen ?? NSScreen.screens.first else {
@@ -169,8 +173,32 @@ enum WindowSelfTest {
             failures: &failures
         )
 
+        if let planner = showPlanner() {
+            await settle()
+            check(planner.isVisible && planner.frame.height > 170, "daily goal planner fits its controls", failures: &failures)
+            // Deliver Return to this preview window only, through the real default button.
+            if let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: planner.windowNumber, context: nil,
+                characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) {
+                NSApp.sendEvent(enter)
+            }
+            await settle()
+            check(model.today.goal == 2 && !planner.isVisible, "daily goal button commits and closes", failures: &failures)
+            planner.close()
+        } else { failures.append("daily goal planner did not open") }
+        if let hit = compactHit(in: panel.contentView) {
+            check(hit.trackingAreas.contains { $0.options.contains(.activeAlways) }, "hover works outside the key app", failures: &failures)
+            check((hit.accessibilityValue() as? String)?.contains("0 / 2") == true, "compact timer exposes daily progress", failures: &failures)
+        } else { failures.append("compact timer missing its hover and drag surface") }
+        if let overview = showOverview() {
+            await settle()
+            check(overview.isVisible && (overview.contentView?.bounds.height ?? 0) > 200,
+                  "daily overview displays its history", failures: &failures)
+            overview.close()
+        } else { failures.append("daily overview did not open") }
+
         if failures.isEmpty {
-            print("Window self-test passed: 4 groups")
+            print("Window self-test passed: 5 groups")
             return 0
         }
 
@@ -179,6 +207,14 @@ enum WindowSelfTest {
             print("FAIL: \(failure)")
         }
         return 1
+    }
+
+    private static func compactHit(in view: NSView?) -> CompactHitView? {
+        if let hit = view as? CompactHitView { return hit }
+        for child in view?.subviews ?? [] {
+            if let hit = compactHit(in: child) { return hit }
+        }
+        return nil
     }
 
     private static func applyScale(

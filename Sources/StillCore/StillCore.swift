@@ -47,7 +47,11 @@ public struct FocusSession: Codable, Identifiable, Equatable, Sendable {
     public let completedAt: Date
     public let duration: TimeInterval
 
-    public init(id: UUID, startedAt: Date, completedAt: Date, duration: TimeInterval) {
+    /// Older session records predate time-zone capture and use the viewing Mac's zone.
+    public let timeZone: TimeZone?
+
+    public init(id: UUID, startedAt: Date, completedAt: Date, duration: TimeInterval, timeZone: TimeZone? = .current) {
+        self.timeZone = timeZone
         self.id = id
         self.startedAt = startedAt
         self.completedAt = completedAt

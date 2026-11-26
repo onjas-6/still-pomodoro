@@ -5,32 +5,47 @@ import StillCore
 import UserNotifications
 
 struct LocalArchive: Codable {
-    var version = 2
+    var version = 3
     var timer = TimerState()
     var sessions: [FocusSession] = []
     var preferences = Preferences()
+    // Optional keys keep v1/v2 recovery archives readable.
+    var dailyEvents: [DailyEvent]?
+    var lastPlanPromptDay: String?
+    var journalPathConfirmed: Bool?
 }
 
 private struct JournalSyncRequest: Sendable {
     let path: String
     let pathIntent: Int
-    let sessionRevision: Int
-    let sessions: [FocusSession]
+    let entries: JournalEntries
+    let importsLegacyJournal: Bool
     let adoptsPath: Bool
     let createsIfMissing: Bool
 }
 
 private enum JournalSyncResult: Sendable {
-    case success([FocusSession])
+    case success(JournalEntries)
     case failure(String)
 }
 
 @MainActor
 final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     @Published private(set) var timer = TimerState()
-    @Published private(set) var sessions: [FocusSession] = []
+    private var entries = JournalEntries() {
+        didSet { days = FocusDay.history(entries) }
+    }
+    @Published private(set) var days: [String: FocusDay] = [:]
+    private(set) var todayID = DailyEvent.dayID(for: Date())
+    private var lastPlanPromptDay: String?
+    private var journalPathConfirmed = false
+    var sessions: [FocusSession] { entries.sessions }
     @Published var preferences = Preferences()
-    @Published private(set) var now = Date()
+    @Published private(set) var now = Date() {
+        didSet {
+            todayID = DailyEvent.dayID(for: now)
+        }
+    }
     @Published private(set) var restReminderActive = false
     /// A live focus completion needs a visual path even when notifications or sound are off.
     /// This is deliberately transient: restored, already-expired timers do not re-present it.
@@ -52,7 +67,6 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private var canSave = true
     private var journalPathIntent = 0
     private var pendingJournalPath: String?
-    private var journalSessionRevision = 0
     private var queuedJournalRequests: [String: JournalSyncRequest] = [:]
     private var activeJournalPaths: Set<String> = []
     private var journalPathWaiters: [Int: CheckedContinuation<Bool, Never>] = [:]
@@ -73,10 +87,14 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         stayAwake = StayAwake(directory: dataURL.deletingLastPathComponent(), enabled: !preview && dataDirectory == nil)
         super.init()
         if !preview { load() }
-        let hadStoredJournalPath = !preferences.journalPath.isEmpty
-        if preferences.journalPath.isEmpty {
-            let directory = dataDirectory != nil ? dataURL.deletingLastPathComponent() : FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            preferences.journalPath = directory.appendingPathComponent("Still-sessions.md").path
+        if let dataDirectory {
+            if preferences.journalPath.isEmpty {
+                preferences.journalPath = dataDirectory.appendingPathComponent("Still-sessions.md").path
+            }
+        } else if preferences.journalPath.isEmpty ||
+                    (!journalPathConfirmed && preferences.journalPath == JournalLocation.legacyJournal.path) {
+            let hasMySpace = !preview && FileManager.default.fileExists(atPath: JournalLocation.mySpace.path)
+            preferences.journalPath = (hasMySpace ? JournalLocation.mySpaceJournal : JournalLocation.legacyJournal).path
         }
         UNUserNotificationCenter.current().delegate = self
         // Reconcile a deadline that elapsed while Still was closed, without replaying an old chime.
@@ -88,6 +106,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             self?.refreshClock(to: date)
         }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(timeZoneChanged), name: .NSSystemTimeZoneDidChange, object: nil)
         if managesSystemNotifications {
             // Older releases used one-off timer IDs. Remove only those legacy requests;
             // the new daily rest reminder has its own stable identifier.
@@ -100,7 +119,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         if !preview {
             // The existence check and any Markdown I/O run on the journal worker. A
             // newly generated default path with no sessions is intentionally untouched.
-            if syncJournalOnLaunch && (!sessions.isEmpty || hadStoredJournalPath) { synchronizeJournal() }
+            if syncJournalOnLaunch { synchronizeJournal() }
             if managesSystemNotifications {
                 Task { await refreshNotificationStatus() }
                 if timer.phase == .running { syncNotification(requestPermission: false) }
@@ -113,11 +132,38 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     var minutes: String { String(format: "%02d", remaining / 60) }
     var seconds: String { String(format: "%02d", remaining % 60) }
     var progress: Double { min(1, max(0, 1 - timer.remaining(at: now) / timer.duration)) }
-    var todaySessions: [FocusSession] { sessions.filter { Calendar.current.isDate($0.completedAt, inSameDayAs: now) } }
-    var todayMinutes: Int { Int(todaySessions.reduce(0) { $0 + $1.duration } / 60) }
+    var today: FocusDay { days[todayID] ?? FocusDay(id: todayID) }
+
+    var suggestedGoal: Int {
+        if let goal = today.goal { return goal }
+        let previous = days.values.filter { $0.id < todayID && ($0.goal ?? 0) > 0 }.max { $0.id < $1.id }
+        return previous?.goal ?? 2
+    }
+
+    func needsDailyGoalPrompt(at date: Date = Date()) -> Bool {
+        let day = DailyEvent.dayID(for: date)
+        return days[day]?.goal == nil && lastPlanPromptDay != day
+    }
+
+    func takeDailyGoalPrompt(at date: Date = Date()) -> Bool {
+        guard needsDailyGoalPrompt(at: date) else { return false }
+        let day = DailyEvent.dayID(for: date)
+        lastPlanPromptDay = day
+        persist()
+        return true
+    }
+
+    func setDailyGoal(_ count: Int, at date: Date = Date()) {
+        guard DailyEvent.goalRange.contains(count) else { return }
+        advance(to: date)
+        guard today.goal != count else { return }
+        entries.events.append(DailyEvent(.goal(count), at: date))
+        persist()
+        synchronizeJournal()
+    }
     var totalMinutes: Int { Int(sessions.reduce(0) { $0 + $1.duration } / 60) }
     var isInProgress: Bool { timer.phase == .running || timer.phase == .paused }
-    private var suggestedBreakMode: TimerMode { todaySessions.count % 4 == 0 ? .longBreak : .shortBreak }
+    private var suggestedBreakMode: TimerMode { today.completed % 4 == 0 ? .longBreak : .shortBreak }
     var focusCompletionBreakButtonTitle: String {
         let minutes = Int(duration(for: suggestedBreakMode) / 60)
         return "Start \(minutes)-minute break"
@@ -189,10 +235,15 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         syncNotification(requestPermission: false)
     }
     func reset() {
+        advance(to: Date())
+        let stopped = isInProgress && timer.mode == .focus
+        if stopped, let id = timer.sessionID, let start = timer.startedAt {
+            entries.events.append(DailyEvent(.stopped(startedAt: start), at: now, id: id))
+        }
         focusCompletionAlertActive = false
         timer.configure(mode: timer.mode, duration: duration(for: timer.mode))
-        now = Date()
         persist()
+        if stopped { synchronizeJournal() }
         syncNotification(requestPermission: false)
     }
     /// - Parameter minutes: nil keeps the Mac awake until turned off.
@@ -265,6 +316,11 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             advance(to: date)
         }
     }
+    @objc private func timeZoneChanged() {
+        days = FocusDay.history(entries)
+        woke()
+    }
+
     @objc private func woke() {
         let date = Date()
         advance(to: date)
@@ -283,38 +339,38 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     }
     private func add(_ session: FocusSession) {
         if !sessions.contains(where: { $0.id == session.id }) {
-            sessions.append(session)
-            journalSessionRevision += 1
+            entries.sessions.append(session)
         }
     }
     var journalDisplayPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return preferences.journalPath.hasPrefix(home + "/") ? "~" + preferences.journalPath.dropFirst(home.count) : preferences.journalPath
     }
+    private func importsLegacyJournal(for path: String) -> Bool {
+        !journalPathConfirmed && path == preferences.journalPath && path == JournalLocation.mySpaceJournal.path
+    }
+
     @discardableResult
     func setJournalPath(_ path: String) -> Bool {
         guard !isPreview else { preferences.journalPath = path; return true }
         guard let normalizedPath = normalizedJournalPath(path) else { return false }
         let intent = beginJournalPathChange(to: normalizedPath)
-        let url = URL(fileURLWithPath: normalizedPath)
-        do {
-            let existing = FileManager.default.fileExists(atPath: url.path) ? try MarkdownJournal.read(from: url) : []
-            let merged = Self.mergedSessions(sessions, existing)
-            try MarkdownJournal.synchronize(sessions: merged, to: url)
-            if merged.count != sessions.count { journalSessionRevision += 1 }
-            sessions = merged
+        let request = JournalSyncRequest(path: normalizedPath, pathIntent: intent, entries: entries,
+            importsLegacyJournal: importsLegacyJournal(for: normalizedPath), adoptsPath: true, createsIfMissing: true)
+        switch Self.performJournalSync(request) {
+        case let .success(records):
+            _ = importEntries(records)
             preferences.journalPath = normalizedPath
+            journalPathConfirmed = true
             pendingJournalPath = nil
             journalError = nil
             persist()
             refreshJournalBusy()
             return true
-        } catch {
-            if intent == journalPathIntent {
-                pendingJournalPath = nil
-                journalError = "Could not use this Markdown file: \(error.localizedDescription)"
-                refreshJournalBusy()
-            }
+        case let .failure(message):
+            pendingJournalPath = nil
+            journalError = "Could not use this Markdown file: \(message)"
+            refreshJournalBusy()
             return false
         }
     }
@@ -337,7 +393,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         }
     }
 
-    private func synchronizeJournal() {
+    func synchronizeJournal() {
         guard !isPreview else { return }
         let path = pendingJournalPath ?? preferences.journalPath
         guard !path.isEmpty else { return }
@@ -345,7 +401,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             path: path,
             intent: journalPathIntent,
             adoptsPath: pendingJournalPath == path,
-            createsIfMissing: !sessions.isEmpty || pendingJournalPath == path
+            createsIfMissing: !entries.isEmpty || pendingJournalPath == path
         )
     }
 
@@ -381,8 +437,8 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         queuedJournalRequests[path] = JournalSyncRequest(
             path: path,
             pathIntent: intent,
-            sessionRevision: journalSessionRevision,
-            sessions: sessions,
+            entries: entries,
+            importsLegacyJournal: importsLegacyJournal(for: path),
             adoptsPath: adoptsPath,
             createsIfMissing: createsIfMissing
         )
@@ -416,30 +472,26 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         guard isCurrentJournalRequest(request) else { return }
 
         switch result {
-        case let .success(journalSessions):
-            let cacheChanged = mergeJournalSessions(journalSessions)
-            var shouldPersist = cacheChanged
+        case let .success(records):
+            var shouldPersist = importEntries(records)
+            if request.adoptsPath || request.importsLegacyJournal {
+                journalPathConfirmed = true
+                shouldPersist = true
+            }
             if request.adoptsPath {
                 preferences.journalPath = request.path
                 pendingJournalPath = nil
-                shouldPersist = true
                 journalPathWaiters.removeValue(forKey: request.pathIntent)?.resume(returning: true)
             }
             journalError = nil
             if shouldPersist { persist() }
-
-            // A session may have completed while the worker held an older snapshot.
-            // Queue the newest cache without overlapping work on this path.
-            if journalSessionRevision != request.sessionRevision {
-                synchronizeJournal()
-            }
 
         case let .failure(message):
             if request.adoptsPath {
                 pendingJournalPath = nil
                 journalPathWaiters.removeValue(forKey: request.pathIntent)?.resume(returning: false)
             }
-            journalError = "Markdown could not be updated. Your session is retained locally; reopen Still or save the path again to retry. \(message)"
+            journalError = "Markdown could not be updated. Your records are cached locally. Reopen Daily Overview to retry. \(message)"
         }
     }
 
@@ -447,10 +499,10 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         request.pathIntent == journalPathIntent && request.path == currentJournalTargetPath
     }
 
-    private func mergeJournalSessions(_ journalSessions: [FocusSession]) -> Bool {
-        let merged = Self.mergedSessions(sessions, journalSessions)
-        guard merged.count != sessions.count else { return false }
-        sessions = merged
+    private func importEntries(_ journal: JournalEntries) -> Bool {
+        let missing = journal.missing(from: entries)
+        guard !missing.isEmpty else { return false }
+        entries.append(missing)
         return true
     }
 
@@ -460,26 +512,19 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     }
 
     private nonisolated static func performJournalSync(_ request: JournalSyncRequest) -> JournalSyncResult {
-        let url = URL(fileURLWithPath: request.path)
         do {
-            let exists = FileManager.default.fileExists(atPath: url.path)
-            let existing = exists ? try MarkdownJournal.read(from: url) : []
-            let merged = mergedSessions(request.sessions, existing)
-            if exists || !merged.isEmpty || request.createsIfMissing {
-                try MarkdownJournal.synchronize(sessions: merged, to: url)
+            let url = try JournalLocation.resolved(URL(fileURLWithPath: request.path))
+            var records = request.entries
+            if request.importsLegacyJournal, FileManager.default.fileExists(atPath: JournalLocation.legacyJournal.path) {
+                let old = try MarkdownJournal.readEntries(from: JournalLocation.legacyJournal)
+                records.append(old.missing(from: records))
             }
-            return .success(merged)
+            if records.isEmpty && !request.createsIfMissing && !FileManager.default.fileExists(atPath: url.path) {
+                return .success(records)
+            }
+            return .success(try MarkdownJournal.synchronize(records, to: url))
         } catch {
             return .failure(error.localizedDescription)
-        }
-    }
-
-    private nonisolated static func mergedSessions(_ first: [FocusSession], _ second: [FocusSession]) -> [FocusSession] {
-        var ids = Set<UUID>()
-        let merged = (first + second).filter { ids.insert($0.id).inserted }
-        return merged.sorted {
-            if $0.completedAt == $1.completedAt { return $0.id.uuidString < $1.id.uuidString }
-            return $0.completedAt < $1.completedAt
         }
     }
 
@@ -488,11 +533,15 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         let path = preferences.journalPath
         Task { @MainActor [weak self] in
             guard let self, await self.setJournalPathAsync(path) else { return }
-            NSWorkspace.shared.open(URL(fileURLWithPath: self.preferences.journalPath))
+            if let url = try? JournalLocation.resolved(URL(fileURLWithPath: self.preferences.journalPath)) {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
     func showJournalInFinder() {
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: preferences.journalPath)])
+        if let url = try? JournalLocation.resolved(URL(fileURLWithPath: preferences.journalPath)) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
     }
     func enableNotifications() {
         Task {
@@ -624,7 +673,8 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         guard !isPreview, canSave else { return }
         do {
             try FileManager.default.createDirectory(at: dataURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let archive = LocalArchive(timer: timer, sessions: sessions, preferences: preferences)
+            let archive = LocalArchive(timer: timer, sessions: sessions, preferences: preferences,
+                dailyEvents: entries.events, lastPlanPromptDay: lastPlanPromptDay, journalPathConfirmed: journalPathConfirmed)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
@@ -639,7 +689,9 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             decoder.dateDecodingStrategy = .iso8601
             let archive = try decoder.decode(LocalArchive.self, from: Data(contentsOf: dataURL))
             timer = archive.timer
-            sessions = archive.sessions
+            entries = JournalEntries(sessions: archive.sessions, events: archive.dailyEvents ?? [])
+            lastPlanPromptDay = archive.lastPlanPromptDay
+            journalPathConfirmed = archive.journalPathConfirmed ?? false
             preferences = archive.preferences
             preferences.focusMinutes = min(180, max(1, preferences.focusMinutes))
             preferences.shortBreakMinutes = min(60, max(1, preferences.shortBreakMinutes))

@@ -40,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let panelState = PanelState()
     private var statusItem: NSStatusItem!
     private var historyWindow: NSWindow?
+    private var goalWindow: NSWindow?
+    private var planObservation: AnyCancellable?
+    private var dailyStatusObservation: AnyCancellable?
     private var settingsWindow: NSWindow?
     private var restWindow: FloatingPanel?
     private var focusCompletionWindow: FloatingPanel?
@@ -126,6 +129,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         if !windowSelfTest && !renderSelfTest {
             setupMenuBar(); setupDismissal()
+            let dayChanges = model.$now.map { Calendar.current.startOfDay(for: $0) }.removeDuplicates()
+            dailyStatusObservation = Publishers.CombineLatest(model.$days, dayChanges)
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.updateStatusIcon() }
             stayAwakeObservation = model.stayAwake.objectWillChange.sink { [weak self] in
                 DispatchQueue.main.async { self?.updateStatusIcon() }
             }
@@ -136,7 +143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             Task { @MainActor in self?.updateAppearance() }
         }
         panel.orderFrontRegardless()
-        if !preview { shortcutLifecycle.opened(with: model.timer) }
+        if !preview {
+            shortcutLifecycle.opened(with: model.timer)
+            offerDailyGoal()
+        }
         if renderSelfTest {
             Task { @MainActor in
                 exit(await RenderSelfTest.run(model: self.model, setExpanded: { self.setExpanded($0) },
@@ -148,7 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 let result = await WindowSelfTest.run(panel: self.panel,
                     setScale: { self.model.preferences.compactScale = $0; self.model.savePreferences() },
                     setExpanded: { self.setExpanded($0) },
-                    flushPreferences: { self.flushWindowPreferences() })
+                    flushPreferences: { self.flushWindowPreferences() }, model: self.model,
+                    showPlanner: { self.showGoalPlanner(); return self.goalWindow },
+                    showOverview: { self.showHistory(); return self.historyWindow })
                 guard result == 0 else { exit(result) }
                 exit(await FocusReminderSelfTest.run(model: self.model))
             }
@@ -188,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func setExpanded(_ expanded: Bool) {
         flushWindowPreferences()
         guard panelState.expanded != expanded else { return }
-        if expanded { model.inspiration.reload() }
+        if expanded { model.inspiration.reload(); offerDailyGoal() }
         if expanded && !panelAnimator.isAnimating { compactFrame = panel.frame }
         panelState.expanded = expanded
         let target = expanded
@@ -276,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func updateAppearance() {
         let theme = model.preferences.theme
         let appearance: NSAppearance? = theme == "light" ? NSAppearance(named: .aqua) : theme == "dark" ? NSAppearance(named: .darkAqua) : nil
-        for window in [panel, historyWindow, settingsWindow].compactMap({ $0 }) {
+        for window in [panel, historyWindow, settingsWindow, goalWindow].compactMap({ $0 }) {
             if window.appearance?.name != appearance?.name { window.appearance = appearance }
             if window !== panel { window.backgroundColor = .windowBackgroundColor }
         }
@@ -448,7 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(.separator())
         menu.addItem(stayAwakeMenuItem())
         menu.addItem(.separator())
-        addItem("Session history", action: #selector(showHistory), key: "h")
+        addItem("Daily Overview · " + model.today.progressText, action: #selector(showHistory), key: "h")
         addItem("Open Markdown journal", action: #selector(openJournal), key: "")
         addItem("Preferences…", action: #selector(showSettings), key: ",")
         menu.addItem(.separator())
@@ -495,7 +507,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let stayAwake = model.stayAwake
         button.image = NSImage(systemSymbolName: stayAwake.isActive ? "leaf.circle.fill" : "leaf.circle",
                                accessibilityDescription: "Still — focus timer")
-        button.toolTip = stayAwake.isActive ? "Still · " + stayAwake.statusText() : "Still"
+        let summary = "Still · " + model.today.hoverText
+        button.toolTip = stayAwake.isActive ? summary + " · " + stayAwake.statusText() : summary
     }
     @objc private func startStayAwake(_ sender: NSMenuItem) { model.startStayAwake(minutes: sender.tag == 0 ? nil : sender.tag) }
     @objc private func stopStayAwake() { model.stayAwake.stop() }
@@ -505,19 +518,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         item.target = self
         menu.addItem(item)
     }
-    @objc func showTimer() { panel.orderFrontRegardless() }
+    @objc func showTimer() { panel.orderFrontRegardless(); offerDailyGoal() }
     @objc private func showControls() { showTimer(); setExpanded(true) }
     @objc private func hideTimer() { setExpanded(false); panel.orderOut(nil) }
-    @objc private func toggleTimer() { model.primaryAction() }
+    @objc private func toggleTimer() { model.primaryAction(); offerDailyGoal() }
     @objc private func resetTimer() { model.reset() }
     @objc private func openJournal() { model.openJournal() }
     @objc private func quit() { NSApp.terminate(nil) }
     @objc private func showHistory() {
         setExpanded(false)
-        if historyWindow == nil { historyWindow = detailWindow(title: "Still — Sessions", view: HistoryView(model: model)) }
+        model.synchronizeJournal()
+        if historyWindow == nil {
+            historyWindow = detailWindow(title: "Still — Daily Overview", view: HistoryView(model: model,
+                editGoal: { [weak self] in self?.showGoalPlanner() }))
+        }
         historyWindow?.center(); historyWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        offerDailyGoal()
     }
+    /// Ask on the first deliberate open, including the first use after an overnight
+    /// launch. Midnight alone never takes focus from the user's current app.
+    private func offerDailyGoal() {
+        guard !preview, model.needsDailyGoalPrompt(), planObservation == nil else { return }
+        if !model.journalIsBusy { model.synchronizeJournal() }
+        // A fresh Mac can already have today's plan in the shared Markdown file.
+        planObservation = model.$journalIsBusy.filter { !$0 }.first().receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.planObservation = nil
+                if self.model.takeDailyGoalPrompt() { self.showGoalPlanner() }
+            }
+    }
+
+    private func showGoalPlanner() {
+        if goalWindow == nil {
+            goalWindow = detailWindow(title: "Still — Daily goal", view: GoalPlannerView(model: model,
+                close: { [weak self] in self?.goalWindow?.close() }))
+            goalWindow?.center()
+        }
+        goalWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc private func showSettings() {
         setExpanded(false)
         if settingsWindow == nil { settingsWindow = detailWindow(title: "Still — Preferences", view: PreferencesView(model: model, focusTargets: focusTargets, shortcutOnOpenRunner: shortcutOnOpenRunner)) }
@@ -545,5 +587,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.contentView = nil
         if window === settingsWindow { settingsWindow = nil }
         if window === historyWindow { historyWindow = nil }
+        if window === goalWindow { goalWindow = nil }
     }
 }
