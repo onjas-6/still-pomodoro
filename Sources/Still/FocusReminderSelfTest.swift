@@ -91,6 +91,9 @@ enum FocusReminderSelfTest {
         model.primaryAction()
         check(!visible(completion) && !visible(nudge), "Break clears completion and suppresses reminders")
         model.reset()
+        store.update { $0.enabled = false }
+
+        failures += await inactivityChecks(model: model, directory: directory.appendingPathComponent("inactivity"))
 
         var visit = FocusVisit()
         visit.enter(.distraction("example.org"))
@@ -103,6 +106,107 @@ enum FocusReminderSelfTest {
         for failure in failures { print("FAIL: \(failure)") }
         print("Focus reminder window checks " + (failures.isEmpty ? "passed" : "failed"))
         return failures.isEmpty ? 0 : 1
+    }
+
+    /// Uses only fake monotonic values; no real input state or sound is observed.
+    private static func inactivityChecks(model: AppModel, directory: URL) async -> [String] {
+        let store = FocusTargetStore(directory: directory)
+        var idle: TimeInterval = 3_600
+        var uptime: TimeInterval = 1_000
+        var uptimeStart: TimeInterval = 1_000
+        var desktopAvailable = true
+        var chimes = 0
+        let clock = SnoozeClock()
+        let monitor = FocusReminderMonitor(
+            model: model, store: store, frontmost: { nil },
+            sleepForSnooze: { await clock.sleep(for: $0) },
+            inactivity: InactivityEnvironment(
+                idleSeconds: { idle }, uptime: { uptime }, desktopAvailable: { desktopAvailable },
+                playSound: { chimes += 1 }
+            )
+        )
+        defer { model.reset(); withExtendedLifetime(monitor) {} }
+        var failures = [String]()
+        func check(_ condition: Bool, _ label: String) {
+            if !condition { failures.append(label) }
+        }
+        func visible() -> Bool {
+            NSApp.windows.contains { $0.title == "Still — Focus reminder" && $0.isVisible && $0.frame.height > 50 }
+        }
+        func tick(_ start: Date, _ elapsed: TimeInterval, _ inputIdle: TimeInterval) {
+            uptime = uptimeStart + elapsed
+            idle = inputIdle
+            model.advance(to: start.addingTimeInterval(elapsed))
+        }
+
+        store.update { $0 = FocusTargets(enabled: true, apps: [], websites: [], idleMinutes: 1) }
+        model.preferences.soundEnabled = true
+        model.startFocus(minutes: 10)
+        let start = model.now
+        tick(start, 59, 3_659)
+        check(!visible() && chimes == 0, "Inactivity caps pre-focus idle at the focus baseline")
+        tick(start, 60, 3_660)
+        check(visible() && chimes == 1, "Inactivity works with no app or website targets")
+        tick(start, 61, 3_661)
+        check(visible() && chimes == 1, "Inactivity presents and chimes once per idle episode")
+
+        tick(start, 62, 0)
+        tick(start, 66.9, 4.9)
+        check(visible(), "Inactivity keeps its panel during the five-second activity grace")
+        tick(start, 67.1, 5.1)
+        check(!visible(), "Inactivity clears its panel after resumed activity")
+        model.preferences.soundEnabled = false
+        tick(start, 127.1, 65)
+        check(visible() && chimes == 1, "Muted inactivity remains visual without a chime")
+
+        store.update { $0.idleMinutes = 0 }
+        tick(start, 128, 66)
+        check(!visible() && chimes == 1, "Inactivity off suppresses an active reminder")
+        store.update { $0.idleMinutes = 1 }
+        model.primaryAction()
+        tick(start, 200, 130)
+        check(!visible(), "Paused focus suppresses inactivity")
+        model.reset()
+        model.startBreak(.shortBreak)
+        let breakStart = model.now
+        tick(breakStart, 60, 190)
+        check(!visible(), "Breaks suppress inactivity")
+        model.reset()
+
+        desktopAvailable = false
+        uptimeStart = 2_000
+        uptime = uptimeStart
+        idle = 8_000
+        model.preferences.soundEnabled = true
+        model.startFocus(minutes: 10)
+        let resumedStart = model.now
+        tick(resumedStart, 60, 8_060)
+        check(!visible() && chimes == 1, "Sleep or lock suppresses inactivity")
+        desktopAvailable = true
+        tick(resumedStart, 61, 8_061)
+        check(!visible(), "Wake starts a fresh inactivity baseline")
+        tick(resumedStart, 121, 8_121)
+        check(visible() && chimes == 2, "Inactivity reevaluates after wake")
+
+        monitor.snooze(for: .seconds(60))
+        await wait { clock.duration == .seconds(60) }
+        check(!visible(), "Inactivity snooze hides its panel")
+        uptime += 60
+        idle += 60
+        clock.finish()
+        await wait {
+            model.advance(to: resumedStart.addingTimeInterval(181))
+            return visible()
+        }
+        check(visible() && chimes == 3, "Inactivity reevaluates when its snooze expires")
+
+        monitor.snooze(for: .seconds(60))
+        await wait { clock.duration == .seconds(60) }
+        model.reset()
+        clock.finish()
+        await Task.yield()
+        check(!visible() && chimes == 3, "Cancelling focus prevents a snoozed inactivity reminder")
+        return failures
     }
 
     @MainActor

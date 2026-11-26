@@ -34,6 +34,11 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   When the time is up, Still checks your current app or website and reminds you if it is on
   your list. Leaving a listed destination clears its panel. **Dismiss for this visit** hides
   it until you leave and return.
+- **Inactivity check-in.** After three minutes without Mac input during focus, Still
+  plays a short ping and shows **Still focusing?**. A continuous idle spell gets one
+  ping. Return to the keyboard or trackpad, acknowledge the panel, or snooze it.
+  In **Preferences → Focus reminders**, choose Off, 1, 3, 5, or 10 minutes.
+  The check uses elapsed input time on the Mac. Reading and thinking can also trigger it.
 - **Rest hours.** Set a daily stop-work window (00:00–08:00 by default). A visible,
   softly pulsing reminder returns after a 10-minute delay, even if the timer is hidden.
   You can write your own short message. A daily start notification is available when

@@ -5,6 +5,7 @@ import StillCore
 enum FocusNotice: Equatable {
     case distraction(String)
     case browserAccess
+    case inactive(minutes: Int)
 }
 
 /// Keep a dismissal scoped to the current visit. Moving to an allowed destination
@@ -31,6 +32,20 @@ struct ForegroundApp {
     }
 }
 
+struct InactivityEnvironment {
+    var idleSeconds: () -> TimeInterval = FocusInactivity.inputIdleSeconds
+    var uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var desktopAvailable: () -> Bool = {
+        guard CGDisplayIsAsleep(CGMainDisplayID()) == 0,
+              let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+              session[kCGSessionOnConsoleKey as String] as? Bool == true else { return false }
+        return session["CGSSessionScreenIsLocked"] as? Bool != true
+    }
+    var playSound: () -> Void = {
+        if NSSound(named: "Tink")?.play() != true { NSSound.beep() }
+    }
+}
+
 @MainActor
 final class FocusReminderMonitor {
     private weak var model: AppModel?
@@ -40,6 +55,15 @@ final class FocusReminderMonitor {
     private var snoozeTask: Task<Void, Never>?
     private var session: UUID?
     private var visit = FocusVisit()
+    private enum CheckIn { case armed, visible, acknowledged }
+    private var checkIn = CheckIn.armed
+    private var activityReturnedAt: TimeInterval?
+    private var presented: FocusNotice?
+    private var idleSignal = FocusInactivity()
+    private var idleTicks: AnyCancellable?
+    private var desktopChanges: AnyCancellable?
+    private var screenLocked = false
+    private let inactivity: InactivityEnvironment
     private var targets = FocusTargets()
     private var pid: pid_t?
     private var offeredAccess = false
@@ -52,7 +76,9 @@ final class FocusReminderMonitor {
     init(model: AppModel, store: FocusTargetStore,
          frontmost: @escaping () -> ForegroundApp? = { ForegroundApp.current() },
          readSite: @escaping @Sendable (pid_t) -> BrowserLocation.Result = { BrowserLocation.read(pid: $0) },
-         sleepForSnooze: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+         sleepForSnooze: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+         inactivity: InactivityEnvironment = InactivityEnvironment()) {
+        self.inactivity = inactivity
         self.model = model
         self.frontmost = frontmost
         self.readSite = readSite
@@ -60,6 +86,23 @@ final class FocusReminderMonitor {
         presenter = FocusNoticePanel()
         presenter.dismiss = { [weak self] in self?.dismiss() }
         presenter.snooze = { [weak self] duration in self?.snooze(for: duration) }
+        let workspace = NSWorkspace.shared.notificationCenter
+        let desktopEvents = [NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification,
+                             NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification,
+                             NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.sessionDidBecomeActiveNotification]
+            .map { workspace.publisher(for: $0).eraseToAnyPublisher() }
+        let locked = Notification.Name("com.apple.screenIsLocked")
+        let unlocked = Notification.Name("com.apple.screenIsUnlocked")
+        let lockEvents = [locked, unlocked].map {
+            DistributedNotificationCenter.default().publisher(for: $0).eraseToAnyPublisher()
+        }
+        desktopChanges = Publishers.MergeMany(desktopEvents + lockEvents).receive(on: RunLoop.main)
+            .sink { [weak self] note in
+                guard let self else { return }
+                if note.name == locked { self.screenLocked = true }
+                if note.name == unlocked { self.screenLocked = false }
+                self.resetInactivity()
+            }
         configuration = model.$timer.map { timer in
             timer.mode == .focus && timer.phase == .running ? timer.sessionID : nil
         }.removeDuplicates()
@@ -82,21 +125,62 @@ final class FocusReminderMonitor {
         self.session = session
         self.targets = targets
         stopObserving()
+        resetInactivity()
         if snoozeTask == nil { startObserving() }
     }
 
     private func stopObserving() {
+        idleTicks = nil
+        checkIn = .armed
+        activityReturnedAt = nil
         activation?.cancel()
         activation = nil
         resetVisit()
     }
 
     private func startObserving() {
-        guard session != nil, !targets.apps.isEmpty || !targets.websites.isEmpty else { return }
+        guard session != nil else { return }
+        if targets.idleMinutes > 0 {
+            idleTicks = model?.$now.dropFirst().sink { [weak self] date in self?.checkInIfIdle(at: date) }
+        }
+        guard !targets.apps.isEmpty || !targets.websites.isEmpty else { return }
         activation = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.foregroundChanged() }
         foregroundChanged()
+    }
+
+    private func resetInactivity() {
+        idleSignal.reset(at: inactivity.uptime())
+        checkIn = .armed
+        activityReturnedAt = nil
+        updatePanel()
+    }
+
+    private func checkInIfIdle(at date: Date) {
+        guard !screenLocked, let model, let deadline = model.timer.deadline, date < deadline else { return }
+        let now = inactivity.uptime()
+        let due = idleSignal.evaluate(idleSeconds: inactivity.idleSeconds(), at: now,
+                                      threshold: TimeInterval(targets.idleMinutes * 60))
+        if due {
+            activityReturnedAt = nil
+            guard checkIn == .armed else { return }
+            guard inactivity.desktopAvailable() else { resetInactivity(); return }
+            checkIn = .visible
+            updatePanel()
+            if model.preferences.soundEnabled { inactivity.playSound() }
+        } else if checkIn == .visible {
+            // Give someone reaching for the acknowledgement or snooze buttons time to click.
+            let returned = activityReturnedAt ?? now
+            activityReturnedAt = returned
+            if now - returned >= 5 {
+                checkIn = .armed
+                activityReturnedAt = nil
+                updatePanel()
+            }
+        } else {
+            checkIn = .armed
+        }
     }
 
     private func resetVisit() {
@@ -148,13 +232,22 @@ final class FocusReminderMonitor {
     }
 
     private func show(_ notice: FocusNotice?) {
-        let previous = visit.visible
         visit.enter(notice)
-        if previous != visit.visible { presenter.present(visit.visible) }
+        updatePanel()
+    }
+
+    private func updatePanel() {
+        let next: FocusNotice? = checkIn == .visible ? .inactive(minutes: targets.idleMinutes) : visit.visible
+        guard next != presented else { return }
+        presented = next
+        presenter.present(next)
     }
 
     func snooze(for duration: Duration) {
-        guard case .distraction = visit.visible else { return }
+        switch presented {
+        case .distraction, .inactive: break
+        case .browserAccess, nil: return
+        }
         stopObserving()
         let sleep = sleepForSnooze
         snoozeTask = Task { [weak self] in
@@ -168,7 +261,12 @@ final class FocusReminderMonitor {
     }
 
     private func dismiss() {
-        visit.dismiss()
-        presenter.present(nil)
+        if checkIn == .visible {
+            checkIn = .acknowledged
+            activityReturnedAt = nil
+        } else {
+            visit.dismiss()
+        }
+        updatePanel()
     }
 }

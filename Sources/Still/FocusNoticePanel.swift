@@ -49,7 +49,7 @@ private struct FocusNoticeView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            Image(systemName: notice == .browserAccess ? "globe" : "scope")
+            Image(systemName: iconName)
                 .font(.system(size: 32, weight: .medium))
                 .foregroundStyle(Color(red: 0.99, green: 0.78, blue: 0.33))
                 .accessibilityHidden(true)
@@ -59,15 +59,15 @@ private struct FocusNoticeView: View {
                     Text("You need to focus.").font(.system(size: 29, weight: .bold))
                         .accessibilityAddTraits(.isHeader)
                     Text("\(target) is on your focus reminder list.").font(.callout)
-                    HStack(spacing: 8) {
-                        Text("Remind me in").font(.callout)
-                        Button("1 min") { snooze(.seconds(60)) }
-                            .accessibilityLabel("Remind me in 1 minute")
-                        Button("5 min") { snooze(.seconds(300)) }
-                            .accessibilityLabel("Remind me in 5 minutes")
-                    }
-                    .padding(.top, 5)
+                    snoozeButtons
                     Button("Dismiss for this visit", action: dismiss)
+                case let .inactive(minutes):
+                    Text("Still focusing?").font(.system(size: 29, weight: .bold))
+                        .accessibilityAddTraits(.isHeader)
+                    Text("No Mac input for \(minutes) \(minutes == 1 ? "minute" : "minutes").")
+                        .font(.callout)
+                    snoozeButtons
+                    Button("I’m here", action: dismiss)
                 case .browserAccess:
                     Text("Enable website reminders").font(.system(size: 20, weight: .semibold))
                     Text("Allow Still in Accessibility so it can check the active site during focus.")
@@ -84,5 +84,27 @@ private struct FocusNoticeView: View {
         .foregroundStyle(.white).colorScheme(.dark)
         .background(RoundedRectangle(cornerRadius: 18).fill(Color(red: 0.14, green: 0.17, blue: 0.16)))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color(red: 0.99, green: 0.78, blue: 0.33), lineWidth: 3))
+    }
+
+    private var snoozeButtons: some View {
+        HStack(spacing: 8) {
+            Text("Remind me in").font(.callout)
+            Button("1 min") { snooze(.seconds(60)) }
+                .accessibilityLabel("Remind me in 1 minute")
+            Button("5 min") { snooze(.seconds(300)) }
+                .accessibilityLabel("Remind me in 5 minutes")
+        }
+        .padding(.top, 5)
+    }
+
+    private var iconName: String {
+        switch notice {
+        case .browserAccess:
+            return "globe"
+        case .inactive:
+            return "pause.circle"
+        case .distraction:
+            return "scope"
+        }
     }
 }

@@ -62,7 +62,7 @@ struct PreferencesView: View {
 
             section("ALERTS") {
                 HStack {
-                    Toggle("Soft completion chime", isOn: $model.preferences.soundEnabled)
+                    Toggle("Timer and inactivity sounds", isOn: $model.preferences.soundEnabled)
                     Spacer()
                     Button("Listen") { model.playChime() }.buttonStyle(.link).font(.system(size: 11))
                 }

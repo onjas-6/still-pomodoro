@@ -231,6 +231,17 @@ enum AppModelSelfTest {
         store.update { $0.websites = ["example.org"] }
         recorder.check(FocusTargetStore(directory: directory).targets.websites == ["example.org"],
                        "focus websites: a saved list takes precedence over bundled suggestions")
+
+        let legacyDirectory = directory.appendingPathComponent("legacy", isDirectory: true)
+        try? FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        let legacyFile = legacyDirectory.appendingPathComponent("focus-reminders.json")
+        try? Data(#"{"enabled":true,"apps":[],"websites":["example.org"]}"#.utf8).write(to: legacyFile)
+        let legacyStore = FocusTargetStore(directory: legacyDirectory)
+        recorder.check(legacyStore.targets == FocusTargets(enabled: true, apps: [], websites: ["example.org"], idleMinutes: 3),
+                       "focus websites: legacy reminders default inactivity to three minutes")
+        legacyStore.update { $0.idleMinutes = 0 }
+        recorder.check(FocusTargetStore(directory: legacyDirectory).targets.idleMinutes == 0,
+                       "focus websites: inactivity off round trips")
     }
 
     private static func testFocusCompletionAlert(in directory: URL, recorder: inout Recorder) {

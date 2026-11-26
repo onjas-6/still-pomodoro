@@ -7,9 +7,38 @@ struct FocusApp: Codable, Equatable, Identifiable {
 }
 
 struct FocusTargets: Codable, Equatable {
-    var enabled = true
-    var apps = [FocusApp(id: "com.valvesoftware.steam", name: "Steam")]
-    var websites = Self.suggestedWebsites
+    var enabled: Bool
+    var apps: [FocusApp]
+    var websites: [String]
+    /// Minutes without local Mac input before showing a focus check-in. Zero disables it.
+    var idleMinutes: Int
+
+    static let defaultIdleMinutes = 3
+    static let supportedIdleMinutes = [0, 1, 3, 5, 10]
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case apps
+        case websites
+        case idleMinutes
+    }
+
+    init(enabled: Bool = true, apps: [FocusApp] = [FocusApp(id: "com.valvesoftware.steam", name: "Steam")],
+         websites: [String] = FocusTargets.suggestedWebsites, idleMinutes: Int = FocusTargets.defaultIdleMinutes) {
+        self.enabled = enabled
+        self.apps = apps
+        self.websites = websites
+        self.idleMinutes = Self.supportedIdleMinutes.contains(idleMinutes) ? idleMinutes : Self.defaultIdleMinutes
+    }
+
+    /// Older focus-reminder files do not have `idleMinutes`; retain every existing setting and use 3 minutes.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(enabled: try values.decode(Bool.self, forKey: .enabled),
+                  apps: try values.decode([FocusApp].self, forKey: .apps),
+                  websites: try values.decode([String].self, forKey: .websites),
+                  idleMinutes: try values.decodeIfPresent(Int.self, forKey: .idleMinutes) ?? Self.defaultIdleMinutes)
+    }
 
     static let suggestedWebsites: [String] = {
         guard let file = Bundle.main.url(forResource: "FocusWebsites", withExtension: "txt"),

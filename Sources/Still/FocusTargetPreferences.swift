@@ -9,9 +9,19 @@ struct FocusTargetPreferences: View {
     @StoredViewState private var hasAccess = AXIsProcessTrusted()
 
     var body: some View {
-        Toggle("Remind me when I visit these during focus", isOn: Binding(
+        Toggle("Enable focus reminders", isOn: Binding(
             get: { store.targets.enabled }, set: { enabled in store.update { $0.enabled = enabled } }))
         VStack(alignment: .leading, spacing: 8) {
+            Picker("Mac inactivity during focus", selection: Binding(
+                get: { store.targets.idleMinutes },
+                set: { minutes in store.update { $0.idleMinutes = minutes } }
+            )) {
+                ForEach(FocusTargets.supportedIdleMinutes, id: \.self) { minutes in
+                    Text(minutes == 0 ? "Off" : "\(minutes) min").tag(minutes)
+                }
+            }
+            Text("After this much time without input, Still checks in with a sound and a panel. Choose a longer interval for reading.")
+                .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Text("Apps").font(.headline)
                 Spacer()
