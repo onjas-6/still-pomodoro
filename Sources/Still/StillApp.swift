@@ -32,12 +32,16 @@ final class FloatingPanel: NSPanel {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     private var panel: FloatingPanel!
     private var model: AppModel!
+    private var focusTargets: FocusTargetStore!
+    private var focusMonitor: FocusReminderMonitor?
     private let panelState = PanelState()
     private var statusItem: NSStatusItem!
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var restWindow: FloatingPanel?
+    private var focusCompletionWindow: FloatingPanel?
     private var restObservation: AnyCancellable?
+    private var focusCompletionObservation: AnyCancellable?
     private var stayAwakeObservation: AnyCancellable?
     private var menu: NSMenu!
     private var preview = false
@@ -63,6 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let diagnosticDirectory = renderSelfTest
             ? FileManager.default.temporaryDirectory.appendingPathComponent("Still-RenderSelfTest-\(UUID().uuidString)") : nil
         model = AppModel(dataDirectory: diagnosticDirectory, preview: preview)
+        let rulesDirectory = preview ? FileManager.default.temporaryDirectory.appendingPathComponent("Still-Preview-\(UUID())") : model.dataURL.deletingLastPathComponent()
+        focusTargets = FocusTargetStore(directory: rulesDirectory)
+        if !preview { focusMonitor = FocusReminderMonitor(model: model, store: focusTargets) }
         panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: compactSize), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Still"
         panel.identifier = NSUserInterfaceItemIdentifier("StillFloatingTimer")
@@ -92,6 +99,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 self?.showRestReminder(active)
             }
         }
+        if !preview || windowSelfTest {
+            focusCompletionObservation = model.$focusCompletionAlertActive.removeDuplicates().sink { [weak self] active in
+                self?.showFocusCompletion(active)
+            }
+        }
         if !windowSelfTest && !renderSelfTest {
             setupMenuBar(); setupDismissal()
             stayAwakeObservation = model.stayAwake.objectWillChange.sink { [weak self] in
@@ -116,7 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     setScale: { self.model.preferences.compactScale = $0; self.model.savePreferences() },
                     setExpanded: { self.setExpanded($0) },
                     flushPreferences: { self.flushWindowPreferences() })
-                exit(result)
+                guard result == 0 else { exit(result) }
+                exit(await FocusReminderSelfTest.run(model: self.model))
             }
         }
     }
@@ -277,6 +290,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                                           y: visible.maxY - restWindow.frame.height - 28))
         restWindow.orderFrontRegardless()
     }
+    private func showFocusCompletion(_ active: Bool) {
+        guard active else {
+            focusCompletionWindow?.orderOut(nil)
+            focusCompletionWindow?.contentView = nil
+            focusCompletionWindow = nil
+            return
+        }
+        if focusCompletionWindow == nil {
+            let window = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 190),
+                                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.title = "Still — Focus complete"
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = false
+            window.hidesOnDeactivate = false
+            window.isMovableByWindowBackground = false
+            window.isReleasedWhenClosed = false
+            // Keep the cue noticeable without activating Still or interrupting the
+            // app the person is using; fullScreenAuxiliary permits it over a full-screen space.
+            window.level = .statusBar
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            let hosting = NSHostingView(rootView: FocusCompletionView(model: model))
+            hosting.sizingOptions = []
+            window.contentView = hosting
+            focusCompletionWindow = window
+        }
+        guard let focusCompletionWindow else { return }
+        let pointer = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(pointer) }) ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        focusCompletionWindow.setFrameOrigin(NSPoint(x: visible.maxX - focusCompletionWindow.frame.width - 28,
+                                                     y: visible.maxY - focusCompletionWindow.frame.height - 42))
+        focusCompletionWindow.orderFrontRegardless()
+    }
     func windowDidMove(_ notification: Notification) {
         guard !changingFrame, !panelAnimator.isAnimating, notification.object as? NSWindow === panel else { return }
         if panelState.expanded {
@@ -302,6 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panelAnimator.cancel()
         pendingFrameSave?.cancel()
         flushWindowPreferences()
+        model.prepareNotificationForTermination()
         model.stayAwake.stop()
         model.persist(); saveFrame()
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
@@ -421,7 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     @objc private func showSettings() {
         setExpanded(false)
-        if settingsWindow == nil { settingsWindow = detailWindow(title: "Still — Preferences", view: PreferencesView(model: model)) }
+        if settingsWindow == nil { settingsWindow = detailWindow(title: "Still — Preferences", view: PreferencesView(model: model, focusTargets: focusTargets)) }
         settingsWindow?.center(); settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

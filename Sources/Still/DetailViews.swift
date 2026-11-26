@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct PreferencesView: View {
     @ObservedObject var model: AppModel
+    let focusTargets: FocusTargetStore
     @Environment(\.colorScheme) private var colorScheme
     @StoredViewState private var journalPathDraft = ""
     @StoredViewState private var restMessageDraft = ""
@@ -33,6 +34,10 @@ struct PreferencesView: View {
                 }
                 Text("Type a number, then press Return. Applies to your next session.")
                     .font(.system(size: 10)).foregroundStyle(palette.secondary)
+            }
+
+            section("FOCUS REMINDERS") {
+                FocusTargetPreferences(store: focusTargets)
             }
 
             section("BREAKS") {

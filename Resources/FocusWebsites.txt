@@ -1,0 +1,36 @@
+# Social feeds and communities
+instagram.com
+x.com
+twitter.com
+facebook.com
+m.facebook.com
+threads.com
+bsky.app
+reddit.com
+old.reddit.com
+pinterest.com
+tumblr.com
+weibo.com
+xiaohongshu.com
+rednote.com
+
+# Short video and livestreams
+tiktok.com
+douyin.com
+live.douyin.com
+bilibili.com
+live.bilibili.com
+twitch.tv
+kick.com
+
+# Video streaming
+youtube.com
+m.youtube.com
+netflix.com
+hulu.com
+
+# Memes and gaming
+9gag.com
+imgur.com
+store.steampowered.com
+steamcommunity.com

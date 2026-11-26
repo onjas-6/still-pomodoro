@@ -27,7 +27,10 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   window shadow. Reduce Transparency uses a solid surface for readability.
 - **Your sessions, in Markdown.** Pick an existing `.md` file or a new path. Still
   appends completed focus sessions, preserving your notes and avoiding duplicates.
-- **Gentle endings.** Local notifications and an original soft two-note chime.
+- **Focus completion.** A two-note chime sounds when a focus timer ends. A high-contrast
+  completion panel stays visible until you dismiss it or start your break, including when muted.
+- **Focus reminders.** Opening a listed app or website during focus shows **You need to focus.**
+  Leaving the destination clears the panel. You can also dismiss it for the current visit.
 - **Rest hours.** Set a daily stop-work window (00:00–08:00 by default). A visible,
   softly pulsing reminder returns after a 10-minute delay, even if the timer is hidden.
   You can write your own short message. A daily start notification is available when
@@ -77,13 +80,32 @@ your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewher
    visible while Still is running and the Mac is awake. **10 分钟后再提醒** delays it
    for 10 minutes. Turning off **Remind me to stop working** disables the schedule.
 
+6. Under **Focus reminders**, add apps with **Choose app…** or enter a website.
+   Each site matches its exact hostname and its www address. Add work or mobile subdomains
+   individually if desired. App reminders work immediately. For websites, choose
+   **Allow access…** and enable Still under **Privacy & Security → Accessibility**.
+   While a focus timer runs, Still reads the active web document in recognized browsers
+   when macOS exposes its address. Pausing or starting a break stops observation.
+
+   The starter list covers social feeds, short video, streaming, memes and gaming,
+   including Reddit, TikTok, Bilibili, Xiaohongshu and the Steam Store. Each line in
+   the bundled list names an exact host. For example, YouTube matches its main site
+   and mobile site, while YouTube Studio stays available. Still loads your saved
+   choices on subsequent launches. [Full website list](Resources/FocusWebsites.txt)
+
+   The selection draws on public lists from
+   [Focus Blocker](https://github.com/ibrahim0814/focus-blocker#default-blocked-sites),
+   [Focus Nudge](https://github.com/cmc-rep/focus-nudge#how-a-page-is-judged-distracting)
+   and [Focus Defender](https://github.com/XiaoEns/keep-attention).
+
 After quitting Still, you can also set the path from a terminal:
 `/Applications/Still.app/Contents/MacOS/Still --journal /path/to/focus-sessions.md`.
 
 The menu-bar leaf can show or hide the timer, open history, or quit. Hidden timers
 keep running. Quitting leaves an already-scheduled notification intact; a completed
-session is reconciled on the next launch. Notifications and sounds respect macOS
-Focus and notification settings; a sleeping Mac cannot play audio until wake/delivery.
+session is reconciled on the next launch. The live focus chime follows Still’s sound
+switch and the Mac’s output volume. Notifications delivered by macOS follow its Focus
+and notification settings. During sleep the Mac can play a sound only after waking.
 
 ## Your data
 
@@ -99,6 +121,9 @@ folder never pauses the timer or blocks the window. The app shows write errors a
 again. Changing the journal path preserves existing contents and carries your session
 history into the selected file. Keep hidden Still metadata comments if you edit the
 journal, so the app can recognize entries and avoid duplicating them.
+
+Edited distraction lists are saved in `~/Library/Application Support/Still/focus-reminders.json`.
+The reminder compares the current app or website on-device. It does not save a usage log.
 
 Window position lives in macOS app preferences. No data leaves your Mac through Still.
 Any cloud synchronization is controlled by the folder you choose.

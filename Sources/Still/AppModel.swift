@@ -32,6 +32,9 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @Published var preferences = Preferences()
     @Published private(set) var now = Date()
     @Published private(set) var restReminderActive = false
+    /// A live focus completion needs a visual path even when notifications or sound are off.
+    /// This is deliberately transient: restored, already-expired timers do not re-present it.
+    @Published private(set) var focusCompletionAlertActive = false
     @Published var storageError: String?
     @Published var notificationStatus = "Not requested"
     @Published var journalError: String?
@@ -110,6 +113,11 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     var todayMinutes: Int { Int(todaySessions.reduce(0) { $0 + $1.duration } / 60) }
     var totalMinutes: Int { Int(sessions.reduce(0) { $0 + $1.duration } / 60) }
     var isInProgress: Bool { timer.phase == .running || timer.phase == .paused }
+    private var suggestedBreakMode: TimerMode { todaySessions.count % 4 == 0 ? .longBreak : .shortBreak }
+    var focusCompletionBreakButtonTitle: String {
+        let minutes = Int(duration(for: suggestedBreakMode) / 60)
+        return "Start \(minutes)-minute break"
+    }
     var primaryTitle: String {
         switch timer.phase {
         case .running: return "Pause"
@@ -138,9 +146,12 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         advance(to: Date())
         switch timer.phase {
         case .running: timer.pause(at: now)
-        case .ready, .paused: timer.start(at: now)
+        case .ready, .paused:
+            focusCompletionAlertActive = false
+            timer.start(at: now)
         case .completed:
-            let next: TimerMode = timer.mode == .focus ? (todaySessions.count % 4 == 0 ? .longBreak : .shortBreak) : .focus
+            focusCompletionAlertActive = false
+            let next: TimerMode = timer.mode == .focus ? suggestedBreakMode : .focus
             timer.configure(mode: next, duration: duration(for: next))
             timer.start(at: now)
         }
@@ -150,6 +161,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     func startFocus(minutes: Int) {
         guard !isInProgress else { return }
         now = Date()
+        focusCompletionAlertActive = false
         timer.configure(mode: .focus, duration: Double(min(180, max(1, minutes)) * 60))
         timer.start(at: now)
         persist()
@@ -158,6 +170,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     func startBreak(_ mode: TimerMode) {
         guard !isInProgress, mode != .focus else { return }
         now = Date()
+        focusCompletionAlertActive = false
         timer.configure(mode: mode, duration: duration(for: mode))
         timer.start(at: now)
         persist()
@@ -165,12 +178,14 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     }
     func selectMode(_ mode: TimerMode) {
         guard !isInProgress else { return }
+        focusCompletionAlertActive = false
         timer.configure(mode: mode, duration: duration(for: mode))
         now = Date()
         persist()
         syncNotification(requestPermission: false)
     }
     func reset() {
+        focusCompletionAlertActive = false
         timer.configure(mode: timer.mode, duration: duration(for: timer.mode))
         now = Date()
         persist()
@@ -207,8 +222,30 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         if let session { add(session); persist(); synchronizeJournal() }
         if wasRunning && timer.phase == .completed {
             persist()
-            if preferences.soundEnabled && !systemChimeScheduled { playChime() }
+            // Always give a just-finished focus session a local visual acknowledgement.
+            // It is intentionally independent of sound/notification settings so it also
+            // covers muted Macs and denied notification permission.
+            if timer.mode == .focus {
+                focusCompletionAlertActive = true
+                // Focus timer notifications stay silent while Still is running, so
+                // this bundled chime is the one audible completion signal.
+                if shouldPlayDirectChime(for: .focus) { playChime() }
+            } else if preferences.soundEnabled && !systemChimeScheduled {
+                // Preserve the existing break behavior when its notification was not
+                // scheduled (for example, notifications are unavailable).
+                playChime()
+            }
         }
+    }
+
+    func dismissFocusCompletionAlert() {
+        focusCompletionAlertActive = false
+    }
+
+    /// The live focus sound must not depend on notification sounds being allowed.
+    /// Internal so the timer self-check can cover the decision without playing audio.
+    func shouldPlayDirectChime(for completedMode: TimerMode) -> Bool {
+        completedMode == .focus && preferences.soundEnabled
     }
     func refreshClock(to date: Date) {
         let second = Int(date.timeIntervalSince1970)
@@ -457,7 +494,6 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         guard let url = Bundle.main.url(forResource: "StillChime", withExtension: "aiff") else { return }
         sound?.stop()
         sound = NSSound(contentsOf: url, byReference: false)
-        sound?.volume = 0.65
         sound?.play()
     }
     func enableNotifications() {
@@ -502,15 +538,44 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             let content = UNMutableNotificationContent()
             content.title = mode == .focus ? "A moment, well spent." : "Ready for a fresh start?"
             content.body = mode == .focus ? "Your focus session is complete. Take a slow breath and a little break." : "Your break is over. Come back to one thing that matters."
-            if soundEnabled { content.sound = UNNotificationSound(named: UNNotificationSoundName("StillChime.aiff")) }
+            // A running focus timer plays the bundled chime itself at the live
+            // transition. Leave its notification silent to prevent two chimes.
+            // Breaks retain their existing system-notification sound behavior.
+            let usesSystemChime = soundEnabled && mode != .focus
+            if usesSystemChime { content.sound = UNNotificationSound(named: UNNotificationSoundName("StillChime.aiff")) }
             let id = "still.timer"
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, deadline.timeIntervalSinceNow), repeats: false)
             do {
                 try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
-                if generation != notificationGeneration { center.removePendingNotificationRequests(withIdentifiers: [id]) }
-                else { systemChimeScheduled = soundEnabled }
+                if generation == notificationGeneration { systemChimeScheduled = usesSystemChime }
             } catch { notificationStatus = "Could not schedule: \(error.localizedDescription)" }
         }
+    }
+    /// A focus notification is intentionally silent while Still is alive to avoid
+    /// duplicating the direct chime. On a normal quit, replace it with an audible
+    /// fallback and wait only briefly for the notification service to accept it.
+    func prepareNotificationForTermination() {
+        guard managesSystemNotifications,
+              preferences.notificationsEnabled,
+              preferences.soundEnabled,
+              timer.phase == .running,
+              timer.mode == .focus,
+              let deadline = timer.deadline,
+              deadline > Date() else { return }
+
+        notificationGeneration += 1
+        let content = UNMutableNotificationContent()
+        content.title = "A moment, well spent."
+        content.body = "Your focus session is complete. Take a slow breath and a little break."
+        content.sound = UNNotificationSound(named: UNNotificationSoundName("StillChime.aiff"))
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, deadline.timeIntervalSinceNow), repeats: false)
+        let request = UNNotificationRequest(identifier: "still.timer", content: content, trigger: trigger)
+        let accepted = DispatchSemaphore(value: 0)
+        UNUserNotificationCenter.current().add(request) { [weak self] error in
+            if let error { Task { @MainActor in self?.notificationStatus = "Could not schedule: \(error.localizedDescription)" } }
+            accepted.signal()
+        }
+        _ = accepted.wait(timeout: .now() + 0.35)
     }
     private func syncRestNotification() {
         guard managesSystemNotifications else { return }
@@ -535,7 +600,9 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .sound])
+        var options: UNNotificationPresentationOptions = [.banner]
+        if notification.request.content.sound != nil { options.insert(.sound) }
+        completionHandler(options)
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         Task { @MainActor in NotificationCenter.default.post(name: .showStill, object: nil) }

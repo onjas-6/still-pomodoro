@@ -20,6 +20,8 @@ enum AppModelSelfTest {
             defer { try? fileManager.removeItem(at: root) }
 
             testCompletedFocusPersistsOnce(in: root.appendingPathComponent("completed", isDirectory: true), recorder: &recorder)
+            testFocusWebsites(in: root.appendingPathComponent("focus-websites"), recorder: &recorder)
+            testFocusCompletionAlert(in: root.appendingPathComponent("completion-alert", isDirectory: true), recorder: &recorder)
             testCustomDurationsAndSettings(in: root.appendingPathComponent("settings", isDirectory: true), recorder: &recorder)
             testPauseAndResetDoNotArchive(in: root.appendingPathComponent("cancelled", isDirectory: true), recorder: &recorder)
             testRepeatedTicksAreIdempotent(in: root.appendingPathComponent("idempotence", isDirectory: true), recorder: &recorder)
@@ -41,7 +43,7 @@ enum AppModelSelfTest {
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 17 test groups")
+            print("AppModel self-test passed: 19 test groups")
             return 0
         }
 
@@ -158,6 +160,14 @@ enum AppModelSelfTest {
     private static func testQuietClock(in directory: URL, recorder: inout Recorder) {
         let model = AppModel(dataDirectory: directory, preview: true)
         model.preferences.soundEnabled = false
+        recorder.check(!model.shouldPlayDirectChime(for: .focus),
+                       "quiet clock: muted focus completion does not request a direct chime")
+        model.preferences.soundEnabled = true
+        recorder.check(model.shouldPlayDirectChime(for: .focus),
+                       "quiet clock: focus completion requests the bundled chime independent of notifications")
+        recorder.check(!model.shouldPlayDirectChime(for: .shortBreak),
+                       "quiet clock: breaks retain system-notification sound behavior")
+        model.preferences.soundEnabled = false
         var updates = 0
         let observer = model.objectWillChange.sink { updates += 1 }
         defer { observer.cancel() }
@@ -206,6 +216,50 @@ enum AppModelSelfTest {
         recorder.check(restored.sessions.count == 1, "completed focus: saved session restores once")
         restored.advance(to: startedAt.addingTimeInterval(120))
         recorder.check(restored.sessions.count == 1, "completed focus: restored timer does not add a duplicate")
+    }
+
+    private static func testFocusWebsites(in directory: URL, recorder: inout Recorder) {
+        let store = FocusTargetStore(directory: directory)
+        let hosts = store.targets.websites
+        recorder.check(hosts.contains("old.reddit.com") && hosts.contains("douyin.com")
+                       && hosts.contains("store.steampowered.com"), "focus websites: bundled list loads")
+        recorder.check(Set(hosts).count == hosts.count && hosts.allSatisfy { FocusTargets.domain($0) == $0 },
+                       "focus websites: every suggested hostname is canonical and unique")
+        recorder.check(store.targets.matchedDomain("studio.youtube.com") == nil
+                       && store.targets.matchedDomain("reddit.com.example.org") == nil,
+                       "focus websites: work subdomains and lookalikes stay clear")
+        store.update { $0.websites = ["example.org"] }
+        recorder.check(FocusTargetStore(directory: directory).targets.websites == ["example.org"],
+                       "focus websites: a saved list takes precedence over bundled suggestions")
+    }
+
+    private static func testFocusCompletionAlert(in directory: URL, recorder: inout Recorder) {
+        let model = AppModel(dataDirectory: directory, syncJournalOnLaunch: false)
+        model.preferences.soundEnabled = false
+        model.preferences.notificationsEnabled = false
+        model.startFocus(minutes: 1)
+
+        guard let deadline = model.timer.deadline else {
+            recorder.fail("completion alert: focus timer did not start")
+            return
+        }
+        model.advance(to: deadline.addingTimeInterval(0.25))
+        recorder.check(model.focusCompletionAlertActive,
+                       "completion alert: focus completion appears even with sound and notifications off")
+
+        model.dismissFocusCompletionAlert()
+        model.advance(to: deadline.addingTimeInterval(10))
+        recorder.check(!model.focusCompletionAlertActive,
+                       "completion alert: repeated ticks do not re-present a dismissed alert")
+
+        model.primaryAction()
+        guard let breakDeadline = model.timer.deadline else {
+            recorder.fail("completion alert: break timer did not start")
+            return
+        }
+        model.advance(to: breakDeadline.addingTimeInterval(0.25))
+        recorder.check(!model.focusCompletionAlertActive,
+                       "completion alert: break completion does not present the focus alert")
     }
 
     private static func testCustomDurationsAndSettings(in directory: URL, recorder: inout Recorder) {
@@ -321,6 +375,8 @@ enum AppModelSelfTest {
             let model = AppModel(dataDirectory: directory)
             recorder.check(model.timer.phase == .completed, "expired open: elapsed focus timer completes during load")
             recorder.check(model.sessions.count == 1, "expired open: elapsed focus timer adds one session")
+            recorder.check(!model.focusCompletionAlertActive,
+                           "expired open: restored completion does not re-present the live focus alert")
 
             let restored = AppModel(dataDirectory: directory)
             recorder.check(restored.sessions.count == 1, "expired open: reconciled session persists once")
