@@ -29,6 +29,14 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   appends completed focus sessions, preserving your notes and avoiding duplicates.
 - **Focus completion.** Your selected timer sound plays when a focus timer ends. A high-contrast
   completion panel stays visible until you dismiss it or start your break, including when muted.
+- **macOS Focus.** In Preferences, you can connect a pair of Apple shortcuts to open a
+  system Focus when Still opens and turn it off when your focus timer finishes. This
+  keeps the same notification rules in effect when you switch to other apps. The
+  shortcut names are optional and are stored on this Mac. The opening shortcut receives
+  a text file containing the ISO 8601 deadline when a focus timer is running. A shortcut
+  can use that time as the system Focus expiry, including when you quit Still. When there
+  is no running focus deadline, it receives no input. In the ending shortcut, check the
+  current Focus before turning it off so a different mode you selected stays active.
 - **Choose your sounds.** In **Preferences → Alerts**, choose and preview separate sounds
   for timer endings and inactivity. Try a felt piano, kalimba, glass bell, or wood block,
   or keep Still's original sounds. Each **Preview** button works even with automatic sounds off.

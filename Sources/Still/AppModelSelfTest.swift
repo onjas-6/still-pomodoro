@@ -23,6 +23,7 @@ enum AppModelSelfTest {
             testFocusWebsites(in: root.appendingPathComponent("focus-websites"), recorder: &recorder)
             testFocusCompletionAlert(in: root.appendingPathComponent("completion-alert", isDirectory: true), recorder: &recorder)
             try testAlertTones(in: root.appendingPathComponent("alert-tones"), recorder: &recorder)
+            testFocusShortcuts(recorder: &recorder)
             testCustomDurationsAndSettings(in: root.appendingPathComponent("settings", isDirectory: true), recorder: &recorder)
             testPauseAndResetDoNotArchive(in: root.appendingPathComponent("cancelled", isDirectory: true), recorder: &recorder)
             testRepeatedTicksAreIdempotent(in: root.appendingPathComponent("idempotence", isDirectory: true), recorder: &recorder)
@@ -44,7 +45,7 @@ enum AppModelSelfTest {
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 20 test groups")
+            print("AppModel self-test passed: 21 test groups")
             return 0
         }
 
@@ -88,6 +89,41 @@ enum AppModelSelfTest {
         let restored = AppModel(dataDirectory: directory, syncJournalOnLaunch: false)
         recorder.check(restored.preferences.timerTone == .feltPiano && restored.preferences.inactivityTone == .wood,
                        "sounds: timer and inactivity choices restore independently")
+    }
+
+    private static func testFocusShortcuts(recorder: inout Recorder) {
+        var opens = [Date?]()
+        var ends = 0
+        var lifecycle = FocusShortcutLifecycle(runOpen: { opens.append($0); return true }, runEnd: { ends += 1; return true })
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ready = TimerState(mode: .focus, duration: 60)
+        lifecycle.opened(with: ready)
+        var running = ready
+        running.start(at: now)
+        lifecycle.timerChanged(from: ready, to: running)
+        lifecycle.timerChanged(from: running, to: running)
+        recorder.check(opens == [nil, now.addingTimeInterval(60)] && ends == 0,
+                       "Focus shortcuts: open immediately, then set the real deadline exactly once")
+        var paused = running
+        paused.pause(at: now.addingTimeInterval(10))
+        lifecycle.timerChanged(from: running, to: paused)
+        var resumed = paused
+        resumed.start(at: now.addingTimeInterval(30))
+        lifecycle.timerChanged(from: paused, to: resumed)
+        recorder.check(opens == [nil, running.deadline, nil, now.addingTimeInterval(80)] && ends == 0,
+                       "Focus shortcuts: pause removes the expiry and resume sends the revised deadline")
+        var completed = resumed
+        _ = completed.tick(at: now.addingTimeInterval(80))
+        lifecycle.timerChanged(from: resumed, to: completed)
+        lifecycle.timerChanged(from: completed, to: completed)
+        recorder.check(ends == 1, "Focus shortcuts: completing the countdown ends system Focus once")
+        var rest = TimerState(mode: .shortBreak, duration: 60)
+        rest.start(at: now)
+        lifecycle.timerChanged(from: completed, to: rest)
+        recorder.check(opens.count == 4 && ends == 1, "Focus shortcuts: breaks leave the system Focus alone")
+        lifecycle.timerChanged(from: ready, to: running)
+        lifecycle.timerChanged(from: running, to: ready)
+        recorder.check(ends == 2, "Focus shortcuts: cancelling the active session ends the system Focus")
     }
 
     private static func testStayAwake(in directory: URL, recorder: inout Recorder) {

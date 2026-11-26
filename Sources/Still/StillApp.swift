@@ -1,6 +1,7 @@
 // Created 2026-09-15 · gpt-6-astra · Codex
 import AppKit
 import Combine
+import StillCore
 import SwiftUI
 
 @main
@@ -34,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var model: AppModel!
     private var focusTargets: FocusTargetStore!
     private var focusMonitor: FocusReminderMonitor?
+    private let shortcutOnOpenRunner = ShortcutOnOpenRunner()
+    private var shortcutLifecycle: FocusShortcutLifecycle!
     private let panelState = PanelState()
     private var statusItem: NSStatusItem!
     private var historyWindow: NSWindow?
@@ -42,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var focusCompletionWindow: FloatingPanel?
     private var restObservation: AnyCancellable?
     private var focusCompletionObservation: AnyCancellable?
+    private var timerObservation: AnyCancellable?
     private var stayAwakeObservation: AnyCancellable?
     private var menu: NSMenu!
     private var preview = false
@@ -53,7 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var appearanceObservation: NSKeyValueObservation?
     private var pendingWindowPreferences: DispatchWorkItem?
     private var pendingFrameSave: DispatchWorkItem?
+    private var pendingTerminationTimeout: DispatchWorkItem?
     private var windowSelfTest = false
+    private var observedTimer: TimerState?
+    private var terminationPending = false
     private var compactSize: NSSize {
         let scale = model.preferences.compactScale
         return NSSize(width: (128 * scale).rounded(), height: (52 * scale).rounded())
@@ -69,6 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model = AppModel(dataDirectory: diagnosticDirectory, preview: preview)
         let rulesDirectory = preview ? FileManager.default.temporaryDirectory.appendingPathComponent("Still-Preview-\(UUID())") : model.dataURL.deletingLastPathComponent()
         focusTargets = FocusTargetStore(directory: rulesDirectory)
+        shortcutLifecycle = FocusShortcutLifecycle(
+            runOpen: { [weak self] deadline in
+                self?.shortcutOnOpenRunner.runIfConfigured(preferenceKey: ShortcutOnOpenRunner.openPreferenceKey, deadline: deadline) ?? false
+            },
+            runEnd: { [weak self] in
+                self?.shortcutOnOpenRunner.runIfConfigured(preferenceKey: ShortcutOnOpenRunner.endPreferenceKey) ?? false
+            })
         if !preview { focusMonitor = FocusReminderMonitor(model: model, store: focusTargets) }
         panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: compactSize), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Still"
@@ -104,6 +118,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 self?.showFocusCompletion(active)
             }
         }
+        if !preview {
+            observedTimer = model.timer
+            timerObservation = model.$timer.sink { [weak self] timer in
+                self?.handleFocusTimerChange(timer)
+            }
+        }
         if !windowSelfTest && !renderSelfTest {
             setupMenuBar(); setupDismissal()
             stayAwakeObservation = model.stayAwake.objectWillChange.sink { [weak self] in
@@ -116,6 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             Task { @MainActor in self?.updateAppearance() }
         }
         panel.orderFrontRegardless()
+        if !preview { shortcutLifecycle.opened(with: model.timer) }
         if renderSelfTest {
             Task { @MainActor in
                 exit(await RenderSelfTest.run(model: self.model, setExpanded: { self.setExpanded($0) },
@@ -343,11 +364,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func saveFrame() {
         if !preview { UserDefaults.standard.set(NSStringFromRect(compactFrame), forKey: "compactFrame") }
     }
+    private func handleFocusTimerChange(_ timer: TimerState) {
+        defer { observedTimer = timer }
+        guard let observedTimer else { return }
+        shortcutLifecycle.timerChanged(from: observedTimer, to: timer)
+    }
+    private func finishTerminationRequest() {
+        guard terminationPending else { return }
+        terminationPending = false
+        pendingTerminationTimeout?.cancel()
+        pendingTerminationTimeout = nil
+        NSApp.reply(toApplicationShouldTerminate: true)
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showTimer(); return true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !preview else { return .terminateNow }
+        guard !terminationPending else { return .terminateLater }
+        if shortcutLifecycle.shouldRunEndOnQuit(timer: model.timer) { shortcutLifecycle.focusCompleted() }
+        guard shortcutOnOpenRunner.hasPendingWork else { return .terminateNow }
+
+        terminationPending = true
+        shortcutOnOpenRunner.whenIdle { [weak self] in self?.finishTerminationRequest() }
+        let timeout = DispatchWorkItem { [weak self] in self?.finishTerminationRequest() }
+        pendingTerminationTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
+        return .terminateLater
+    }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showTimer()
+        if !preview { shortcutLifecycle.opened(with: model.timer) }
+        return true
+    }
     func applicationWillTerminate(_ notification: Notification) {
         panelAnimator.cancel()
         pendingFrameSave?.cancel()
+        pendingTerminationTimeout?.cancel()
         flushWindowPreferences()
         model.prepareNotificationForTermination()
         model.stayAwake.stop()
@@ -469,7 +520,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     @objc private func showSettings() {
         setExpanded(false)
-        if settingsWindow == nil { settingsWindow = detailWindow(title: "Still — Preferences", view: PreferencesView(model: model, focusTargets: focusTargets)) }
+        if settingsWindow == nil { settingsWindow = detailWindow(title: "Still — Preferences", view: PreferencesView(model: model, focusTargets: focusTargets, shortcutOnOpenRunner: shortcutOnOpenRunner)) }
         settingsWindow?.center(); settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct PreferencesView: View {
     @ObservedObject var model: AppModel
     let focusTargets: FocusTargetStore
+    @ObservedObject var shortcutOnOpenRunner: ShortcutOnOpenRunner
     @Environment(\.colorScheme) private var colorScheme
     @StoredViewState private var journalPathDraft = ""
     @StoredViewState private var restMessageDraft = ""
@@ -60,6 +61,7 @@ struct PreferencesView: View {
                 }
                 Text("Type a number, then press Return. Applies to your next session.")
                     .font(.system(size: 10)).foregroundStyle(palette.secondary)
+                FocusShortcutPreferences(runner: shortcutOnOpenRunner, palette: palette)
             }
 
             alertSettings
@@ -252,6 +254,34 @@ struct PreferencesView: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         saveJournalPath(url.path)
+    }
+}
+
+private struct FocusShortcutPreferences: View {
+    @AppStorage(ShortcutOnOpenRunner.openPreferenceKey) private var openShortcutName = ""
+    @AppStorage(ShortcutOnOpenRunner.endPreferenceKey) private var endShortcutName = ""
+    @ObservedObject var runner: ShortcutOnOpenRunner
+    let palette: Palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            shortcutNameField("On open or focus start", text: $openShortcutName)
+            shortcutNameField("On focus end", text: $endShortcutName)
+            Text("Enter Apple shortcut names to control a macOS Focus. Leave a field blank to skip that action.")
+                .font(.system(size: 10)).foregroundStyle(palette.secondary)
+            if let error = runner.errorMessage {
+                Text(error).font(.system(size: 10)).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func shortcutNameField(_ label: String, text: Binding<String>) -> some View {
+        HStack(spacing: 10) {
+            Text(label).font(.system(size: 12))
+            TextField("Shortcut name", text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+        }
     }
 }
 
