@@ -13,8 +13,10 @@ enum FocusReminderSelfTest {
         let browser = ForegroundApp(pid: 2, bundleID: "com.google.Chrome")
         var frontmost = game
         let site = TestSite()
+        let clock = SnoozeClock()
         let monitor = FocusReminderMonitor(model: model, store: store, frontmost: { frontmost },
-                                          readSite: { _ in .site(site.read()) })
+                                          readSite: { _ in .site(site.read()) },
+                                          sleepForSnooze: { await clock.sleep(for: $0) })
         defer { withExtendedLifetime(monitor) {} }
         var failures = [String]()
 
@@ -42,6 +44,13 @@ enum FocusReminderSelfTest {
         check(!visible(nudge), "Ready timer hides reminder")
         model.startFocus(minutes: 1)
         check(visible(nudge), "Starting focus inside a listed app raises reminder")
+        let originalDeadline = model.timer.deadline
+        monitor.snooze(for: .seconds(60))
+        await wait { clock.duration != nil }
+        check(clock.duration == .seconds(60) && !visible(nudge), "One-minute action hides the reminder for 60 seconds")
+        clock.finish()
+        await wait { visible(nudge) }
+        check(visible(nudge) && model.timer.deadline == originalDeadline, "Expiry rechecks the same app without changing focus")
         model.primaryAction()
         check(!visible(nudge), "Pausing dismisses reminder")
         model.primaryAction()
@@ -56,14 +65,29 @@ enum FocusReminderSelfTest {
         site.set("example.org")
         await wait { visible(nudge) }
         check(visible(nudge), "Tab change raises website reminder inside same browser")
+        monitor.snooze(for: .seconds(300))
+        await wait { clock.duration != nil }
+        check(clock.duration == .seconds(300) && !visible(nudge), "Five-minute action hides the site reminder for 300 seconds")
+        frontmost = game
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        store.update { $0.websites.append("other.example.org") }
+        check(!visible(nudge), "Switching to another listed app or editing rules preserves the snooze")
+        frontmost = browser
         site.set("studio.example.org")
-        await wait { !visible(nudge) }
+        let previousReads = site.reads
+        clock.finish()
+        await wait { site.reads > previousReads }
+        check(site.reads > previousReads, "Website is checked again at expiry")
         check(!visible(nudge), "Switching to work subdomain clears website reminder")
         site.set("example.org")
         await wait { visible(nudge) }
         check(visible(nudge), "Returning to the site starts a new visit")
+        monitor.snooze(for: .seconds(60))
+        await wait { clock.duration != nil }
         model.advance(to: model.timer.deadline!.addingTimeInterval(1))
         check(!visible(nudge) && visible(completion), "Muted completion replaces distraction with completion window")
+        clock.finish()
+        await Task.yield()
         model.primaryAction()
         check(!visible(completion) && !visible(nudge), "Break clears completion and suppresses reminders")
         model.reset()
@@ -81,6 +105,23 @@ enum FocusReminderSelfTest {
         return failures.isEmpty ? 0 : 1
     }
 
+    @MainActor
+    private final class SnoozeClock {
+        private(set) var duration: Duration?
+        private var continuation: CheckedContinuation<Void, Never>?
+        func sleep(for duration: Duration) async {
+            await withCheckedContinuation { next in
+                self.duration = duration
+                continuation = next
+            }
+        }
+        func finish() {
+            duration = nil
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
     private static func wait(until ready: () -> Bool) async {
         let deadline = ProcessInfo.processInfo.systemUptime + 3
         while !ready(), ProcessInfo.processInfo.systemUptime < deadline {
@@ -91,7 +132,14 @@ enum FocusReminderSelfTest {
     private final class TestSite: @unchecked Sendable {
         private let lock = NSLock()
         private var host: String?
-        func read() -> String? { lock.withLock { host } }
+        private var readCount = 0
+        var reads: Int { lock.withLock { readCount } }
+        func read() -> String? {
+            lock.withLock {
+                readCount += 1
+                return host
+            }
+        }
         func set(_ value: String) { lock.withLock { host = value } }
     }
 }

@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class FocusNoticePanel {
     var dismiss: (() -> Void)?
+    var snooze: ((Duration) -> Void)?
     private var panel: NSPanel?
 
     func present(_ notice: FocusNotice?) {
@@ -22,7 +23,13 @@ final class FocusNoticePanel {
         window.level = .statusBar
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: FocusNoticeView(notice: notice, dismiss: { [weak self] in self?.dismiss?() }))
+        let hosting = NSHostingView(
+            rootView: FocusNoticeView(
+                notice: notice,
+                dismiss: { [weak self] in self?.dismiss?() },
+                snooze: { [weak self] duration in self?.snooze?(duration) }
+            )
+        )
         window.contentView = hosting
         let size = hosting.fittingSize
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
@@ -38,6 +45,7 @@ final class FocusNoticePanel {
 private struct FocusNoticeView: View {
     let notice: FocusNotice
     let dismiss: () -> Void
+    let snooze: (Duration) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
@@ -51,7 +59,15 @@ private struct FocusNoticeView: View {
                     Text("You need to focus.").font(.system(size: 29, weight: .bold))
                         .accessibilityAddTraits(.isHeader)
                     Text("\(target) is on your focus reminder list.").font(.callout)
-                    Button("Dismiss for this visit", action: dismiss).padding(.top, 5)
+                    HStack(spacing: 8) {
+                        Text("Remind me in").font(.callout)
+                        Button("1 min") { snooze(.seconds(60)) }
+                            .accessibilityLabel("Remind me in 1 minute")
+                        Button("5 min") { snooze(.seconds(300)) }
+                            .accessibilityLabel("Remind me in 5 minutes")
+                    }
+                    .padding(.top, 5)
+                    Button("Dismiss for this visit", action: dismiss)
                 case .browserAccess:
                     Text("Enable website reminders").font(.system(size: 20, weight: .semibold))
                     Text("Allow Still in Accessibility so it can check the active site during focus.")

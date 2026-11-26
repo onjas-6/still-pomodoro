@@ -30,7 +30,10 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
 - **Focus completion.** A two-note chime sounds when a focus timer ends. A high-contrast
   completion panel stays visible until you dismiss it or start your break, including when muted.
 - **Focus reminders.** Opening a listed app or website during focus shows **You need to focus.**
-  Leaving the destination clears the panel. You can also dismiss it for the current visit.
+  Choose **1 min** or **5 min** to pause distraction reminders while the focus timer continues.
+  When the time is up, Still checks your current app or website and reminds you if it is on
+  your list. Leaving a listed destination clears its panel. **Dismiss for this visit** hides
+  it until you leave and return.
 - **Rest hours.** Set a daily stop-work window (00:00–08:00 by default). A visible,
   softly pulsing reminder returns after a 10-minute delay, even if the timer is hidden.
   You can write your own short message. A daily start notification is available when

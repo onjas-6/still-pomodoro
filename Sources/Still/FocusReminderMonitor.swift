@@ -33,42 +33,66 @@ struct ForegroundApp {
 
 @MainActor
 final class FocusReminderMonitor {
+    private weak var model: AppModel?
     private var configuration: AnyCancellable?
     private var activation: AnyCancellable?
     private var browserTask: Task<Void, Never>?
+    private var snoozeTask: Task<Void, Never>?
+    private var session: UUID?
     private var visit = FocusVisit()
     private var targets = FocusTargets()
     private var pid: pid_t?
     private var offeredAccess = false
     private let frontmost: () -> ForegroundApp?
     private let readSite: @Sendable (pid_t) -> BrowserLocation.Result
+    private let sleepForSnooze: @Sendable (Duration) async throws -> Void
     private let presenter: FocusNoticePanel
     private let accessOfferKey = "didOfferWebsiteReminders"
 
     init(model: AppModel, store: FocusTargetStore,
          frontmost: @escaping () -> ForegroundApp? = { ForegroundApp.current() },
-         readSite: @escaping @Sendable (pid_t) -> BrowserLocation.Result = { BrowserLocation.read(pid: $0) }) {
+         readSite: @escaping @Sendable (pid_t) -> BrowserLocation.Result = { BrowserLocation.read(pid: $0) },
+         sleepForSnooze: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+        self.model = model
         self.frontmost = frontmost
         self.readSite = readSite
+        self.sleepForSnooze = sleepForSnooze
         presenter = FocusNoticePanel()
         presenter.dismiss = { [weak self] in self?.dismiss() }
+        presenter.snooze = { [weak self] duration in self?.snooze(for: duration) }
         configuration = model.$timer.map { timer in
             timer.mode == .focus && timer.phase == .running ? timer.sessionID : nil
         }.removeDuplicates()
             .combineLatest(store.$targets.removeDuplicates())
             .sink { [weak self] session, targets in
-                self?.configure(active: session != nil && targets.enabled, targets: targets)
+                self?.configure(session: targets.enabled ? session : nil, targets: targets)
             }
     }
 
-    deinit { browserTask?.cancel() }
+    deinit {
+        browserTask?.cancel()
+        snoozeTask?.cancel()
+    }
 
-    private func configure(active: Bool, targets: FocusTargets) {
+    private func configure(session: UUID?, targets: FocusTargets) {
+        if self.session != session {
+            snoozeTask?.cancel()
+            snoozeTask = nil
+        }
+        self.session = session
         self.targets = targets
+        stopObserving()
+        if snoozeTask == nil { startObserving() }
+    }
+
+    private func stopObserving() {
         activation?.cancel()
         activation = nil
         resetVisit()
-        guard active, !targets.apps.isEmpty || !targets.websites.isEmpty else { return }
+    }
+
+    private func startObserving() {
+        guard session != nil, !targets.apps.isEmpty || !targets.websites.isEmpty else { return }
         activation = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.foregroundChanged() }
@@ -127,6 +151,20 @@ final class FocusReminderMonitor {
         let previous = visit.visible
         visit.enter(notice)
         if previous != visit.visible { presenter.present(visit.visible) }
+    }
+
+    func snooze(for duration: Duration) {
+        guard case .distraction = visit.visible else { return }
+        stopObserving()
+        let sleep = sleepForSnooze
+        snoozeTask = Task { [weak self] in
+            do { try await sleep(duration) } catch { return }
+            guard !Task.isCancelled, let self else { return }
+            self.snoozeTask = nil
+            // The Mac can wake after both deadlines, before the timer's next tick.
+            guard let deadline = self.model?.timer.deadline, deadline > Date() else { return }
+            self.startObserving()
+        }
     }
 
     private func dismiss() {
