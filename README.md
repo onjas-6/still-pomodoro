@@ -59,7 +59,8 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   what it is. Each answer is saved to your Markdown journal with the app, window title and
   page you were on. Check-ins that arrive during a focus session, go unanswered or are missed
   while you are away are recorded too, so the record has no gaps. Times are random and
-  never shown in advance. Start, stop and practice it under **Preferences → Research mode**.
+  never shown in advance. If Still quits or crashes while a check-in is open, whatever you
+  had already entered is kept. Start, stop and practice it under **Preferences → Research mode**.
   Window titles and pages need Accessibility access. See
   [docs/procrastination-method.md](docs/procrastination-method.md) for the reasoning.
 - **Bedtime reminder.** Set a daily stop-work window (00:00–08:00 by default). A visible,
@@ -74,7 +75,14 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
 - **A little perspective.** An expanded-only thought, with a quiet button for the next one.
   Edit your own local collection; thoughts stay still until you choose another.
 - **Reliable timing.** Pause/resume, sleep/wake, and relaunch use absolute deadlines.
-  Breaks and unfinished intervals never count as focus sessions.
+  Breaks and unfinished intervals never count as focus sessions. Quitting during a timer or a
+  research study writes a short note to the journal (how far the timer got, the study day),
+  and the Markdown file is brought up to date before Still exits. After a crash, force quit
+  or power loss, the next launch notes that the previous run did not close normally.
+- **Light on your Mac.** While idle, Still checks the clock about every 20 seconds. While a
+  timer runs, it wakes once per second, exactly when the displayed time changes. Reminder
+  panels pulse in short bursts instead of continuously, and Still listens for clicks
+  elsewhere only while its controls are open.
 
 ## Build and run
 

@@ -93,10 +93,17 @@ happened:
 | `skipped` | You chose Skip |
 | `expired` | No answer within 10 minutes |
 | `in-focus` | A focus session was running; context recorded without interrupting |
-| `missed` | You were away or the Mac was asleep for 45 minutes after the scheduled time |
+| `missed` | Nobody saw it within 45 minutes; `missedReason` is `still-not-running`, `mac-asleep` or `away` |
+| `interrupted` | Still quit or crashed while it was open, before the first question was answered |
 
-A start note and an end note with totals frame each study. Notes use a separate journal
-marker that older releases ignore.
+If Still quits or crashes after you answered "Yes" but before saving, the note keeps what
+was entered (`complete: no`, `interruptedBy: quit` or `unexpected-exit`). The open check-in
+is mirrored to a small local file whenever you make a choice, so even a crash or power loss
+leaves a record; the next launch writes it.
+
+A start note and an end note with totals frame each study, and launches and quits during a
+study are noted, so gaps in coverage are visible. Notes use a separate journal marker that
+older releases ignore.
 
 **What it can tell you.** The share of sampled moments in which you felt you should be
 doing something else (your personal baseline), how that varies by hour and by app or site,

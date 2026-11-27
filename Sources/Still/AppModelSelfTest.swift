@@ -44,12 +44,14 @@ enum AppModelSelfTest {
             testRestReminder(in: root.appendingPathComponent("rest-reminder", isDirectory: true), recorder: &recorder)
             testStayAwake(in: root.appendingPathComponent("stay-awake", isDirectory: true), recorder: &recorder)
             testResearchMode(in: root.appendingPathComponent("research", isDirectory: true), recorder: &recorder)
+            testInterruptedResearchCheckIn(in: root.appendingPathComponent("research-crash", isDirectory: true), recorder: &recorder)
+            testSessionLifecycle(in: root.appendingPathComponent("lifecycle", isDirectory: true), recorder: &recorder)
         } catch {
             recorder.fail("Unable to create self-test workspace: \(error)")
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 24 test groups")
+            print("AppModel self-test passed: 26 test groups")
             return 0
         }
 
@@ -264,8 +266,10 @@ enum AppModelSelfTest {
         defer { observer.cancel() }
         model.refreshClock(to: model.now.addingTimeInterval(0.25))
         recorder.check(updates == 0, "ready clock: no idle view invalidation")
+        recorder.check(model.clockInterval == AppModel.idleClockInterval, "ready clock: wakes only every few seconds")
 
         model.startFocus(minutes: 1)
+        recorder.check(model.clockInterval == 1, "running clock: wakes once per displayed second")
         let start = model.now
         updates = 0
         for fraction in [0.25, 0.5, 0.75] { model.refreshClock(to: start.addingTimeInterval(fraction)) }
@@ -277,6 +281,7 @@ enum AppModelSelfTest {
         updates = 0
         model.refreshClock(to: model.now.addingTimeInterval(3))
         recorder.check(updates == 0, "paused clock: no idle view invalidation")
+        recorder.check(model.clockInterval == AppModel.idleClockInterval, "paused clock: back to the slow clock")
         model.primaryAction()
         let deadline = model.timer.deadline!
         model.refreshClock(to: deadline.addingTimeInterval(0.25))
@@ -836,6 +841,8 @@ enum AppModelSelfTest {
         recorder.check(expected > 0 && checkIns().count == expected, "research: every past check-in is recorded once (\(checkIns().count)/\(expected))")
         recorder.check(checkIns().allSatisfy { $0["outcome"] == "missed" && $0["study"] == past.id.uuidString },
                        "research: check-ins while Still was not running are recorded as missed")
+        recorder.check(checkIns().allSatisfy { $0["missedReason"] == "still-not-running" },
+                       "research: missed check-ins before launch say Still was not running")
         let endings = { model.notes.filter { $0.kind == ResearchSampler.Kind.study && $0["event"] == "ended" } }
         recorder.check(endings().count == 1 && endings().first?["due"] == "\(expected)",
                        "research: a finished study writes one summary with its totals")
@@ -864,6 +871,68 @@ enum AppModelSelfTest {
                        "research: every note is in the Markdown journal (\(journal.count))")
         let restored = AppModel(dataDirectory: directory, syncJournalOnLaunch: false)
         recorder.check(restored.notes.count == model.notes.count, "research: notes survive in the local recovery cache")
+    }
+
+    /// A check-in left open by a crash is recorded at the next launch with what was entered.
+    private static func testInterruptedResearchCheckIn(in directory: URL, recorder: inout Recorder) {
+        let model = AppModel(dataDirectory: directory, syncJournalOnLaunch: false, playTone: { _ in })
+        let store = ResearchStore(directory: directory, preview: false)
+        let now = Date()
+        let study = ResearchStudy(startedAt: now.addingTimeInterval(-86_400), days: 5, promptsPerDay: 4)
+        store.update { $0.study = study }
+        guard let first = study.allPrompts().first, let second = study.allPrompts().dropFirst().first else {
+            recorder.fail("research crash: the study has prompts"); return
+        }
+        let file = directory.appendingPathComponent("research-active.json")
+        func leaveOpen(_ prompt: ResearchPrompt, partial: ResearchPartial) {
+            var open = ResearchActiveCheckIn(study: study, prompt: prompt, shownAt: prompt.date)
+            open.partial = partial
+            open.context = ResearchContext(appName: "Editor", bundleID: "com.example.editor", windowTitle: "plan.md",
+                                           url: nil, host: nil, idleSeconds: 2, accessibility: true)
+            try? JSONEncoder().encode(open).write(to: file)
+        }
+        leaveOpen(first, partial: ResearchPartial(elsewhere: true, feeling: .bored, task: "write the plan"))
+        _ = ResearchSampler(model: model, store: store)
+        let recovered = model.notes.first { $0["prompt"] == first.key }
+        recorder.check(recovered?["outcome"] == "answered" && recovered?["complete"] == "no"
+                       && recovered?["interruptedBy"] == "unexpected-exit", "research crash: a half-answered check-in is kept")
+        recorder.check(recovered?["feeling"] == "bored" && recovered?["task"] == "write the plan"
+                       && recovered?["windowTitle"] == "plan.md", "research crash: partial answers and context survive")
+        recorder.check(!FileManager.default.fileExists(atPath: file.path), "research crash: the open check-in file is cleared")
+
+        leaveOpen(second, partial: ResearchPartial())
+        let sampler = ResearchSampler(model: model, store: store)
+        recorder.check(model.notes.first { $0["prompt"] == second.key }?["outcome"] == "interrupted",
+                       "research crash: an unanswered open check-in is recorded as interrupted")
+        let count = model.notes.count
+        _ = ResearchSampler(model: model, store: store)
+        sampler.recordInterruption(reason: "quit")
+        recorder.check(model.notes.count == count, "research crash: recovery and quit never duplicate a note")
+    }
+
+    /// Quitting notes an unfinished timer; a run that never quit is reported at the next launch.
+    private static func testSessionLifecycle(in directory: URL, recorder: inout Recorder) {
+        let model = AppModel(dataDirectory: directory, syncJournalOnLaunch: false, playTone: { _ in })
+        let research = ResearchSampler(model: model, store: ResearchStore(directory: directory, preview: false))
+        let marker = directory.appendingPathComponent(SessionLifecycle.markerName)
+        let unclean = { model.notes.filter { $0.kind == SessionLifecycle.Kind.uncleanExit } }
+        SessionLifecycle.launched(model: model, research: research)
+        recorder.check(FileManager.default.fileExists(atPath: marker.path) && unclean().isEmpty,
+                       "lifecycle: a first launch marks the run without an error note")
+        model.startFocus(minutes: 30)
+        SessionLifecycle.quitting(model: model, research: research, at: Date().addingTimeInterval(600))
+        let quit = model.notes.last { $0.kind == SessionLifecycle.Kind.quit }
+        recorder.check(quit?["phase"] == "running" && quit?["elapsedSeconds"].flatMap(Int.init).map { (590...610).contains($0) } == true,
+                       "lifecycle: quitting during focus records how far it got")
+        recorder.check(!FileManager.default.fileExists(atPath: marker.path), "lifecycle: a clean quit clears the marker")
+        SessionLifecycle.launched(model: model, research: research)
+        recorder.check(unclean().isEmpty, "lifecycle: a launch after a clean quit reports nothing")
+        model.reset()
+        SessionLifecycle.launched(model: model, research: research)
+        recorder.check(unclean().count == 1, "lifecycle: a run that never quit is reported once at the next launch")
+        let before = model.notes.count
+        SessionLifecycle.quitting(model: model, research: research)
+        recorder.check(model.notes.count == before, "lifecycle: an idle quit adds no note")
     }
 
     private static func testMySpaceAlias(in directory: URL, recorder: inout Recorder) throws {

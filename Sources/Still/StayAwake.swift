@@ -93,6 +93,7 @@ final class StayAwake: ObservableObject {
         check = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        check?.tolerance = 1
     }
 
     func refresh(now: Date = Date()) {

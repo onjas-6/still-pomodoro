@@ -210,7 +210,9 @@ final class FocusReminderMonitor {
                         case .accessRequired: self.offerAccessIfNeeded()
                         }
                     }
-                    try? await Task.sleep(for: .seconds(1))
+                    // Each read can walk part of the browser's accessibility tree, so poll
+                    // every two seconds and let macOS coalesce the wakeup.
+                    try? await Task.sleep(for: .seconds(2), tolerance: .milliseconds(500))
                 }
             }
         }

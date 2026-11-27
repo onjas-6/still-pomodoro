@@ -53,9 +53,15 @@ struct FocusCompletionView: View {
                 .shadow(color: accent.opacity(glowing ? 0.42 : 0.16), radius: glowing ? 25 : 12)
         }
         .foregroundStyle(primary)
-        .onAppear {
+        .task {
+            // Glow in short bursts; the panel stays until dismissed, which can be a long time.
             guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) { glowing = true }
+            while !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) { glowing = true }
+                try? await Task.sleep(for: .seconds(10))
+                withAnimation(.easeOut(duration: 0.5)) { glowing = false }
+                try? await Task.sleep(for: .seconds(50))
+            }
         }
         .preferredColorScheme(model.preferences.preferredColorScheme())
         .accessibilityElement(children: .contain)

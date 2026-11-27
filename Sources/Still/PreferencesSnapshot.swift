@@ -35,7 +35,7 @@ enum PreferencesSnapshot {
         }
         for (name, askingWhy) in [("check-in-question", false), ("check-in-reasons", true)] {
             let hosting = NSHostingView(rootView: ResearchPromptView(
-                caption: "Check-in 2 of 4 today · day 3 of 14", askingWhy: askingWhy) { _ in })
+                caption: "Check-in 2 of 4 today · day 3 of 14", askingWhy: askingWhy, answer: { _ in }))
             let size = hosting.fittingSize
             let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless],
                                 backing: .buffered, defer: false)

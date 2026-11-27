@@ -44,10 +44,17 @@ struct RestReminderView: View {
         }
         .foregroundStyle(Color(red: 0.22, green: 0.17, blue: 0.12))
         .scaleEffect(breathing ? 1.03 : 1.0)
-        .onAppear {
+        .task {
+            // Pulse in short bursts rather than forever: the reminder can stay up for hours,
+            // and a continuous glow with a large blurred shadow redraws every frame.
             guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { glowing = true }
-            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { breathing = true }
+            while !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { glowing = true }
+                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { breathing = true }
+                try? await Task.sleep(for: .seconds(12))
+                withAnimation(.easeOut(duration: 0.6)) { glowing = false; breathing = false }
+                try? await Task.sleep(for: .seconds(48))
+            }
         }
     }
 }

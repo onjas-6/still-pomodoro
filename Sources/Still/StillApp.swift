@@ -57,6 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var changingFrame = false
     private let panelAnimator = PanelAnimator()
     private var globalClickMonitor: Any?
+    private var dismissalEnabled = false
+    private var lifecycleRecorded = false
+    private var journalQuitObservation: AnyCancellable?
     private var localEventMonitor: Any?
     private var appearanceObservation: NSKeyValueObservation?
     private var pendingWindowPreferences: DispatchWorkItem?
@@ -83,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let rulesDirectory = preview ? FileManager.default.temporaryDirectory.appendingPathComponent("Still-Preview-\(UUID())") : model.dataURL.deletingLastPathComponent()
         focusTargets = FocusTargetStore(directory: rulesDirectory)
         research = ResearchSampler(model: model, store: ResearchStore(directory: rulesDirectory, preview: preview))
+        SessionLifecycle.launched(model: model, research: research)
         shortcutLifecycle = FocusShortcutLifecycle(
             runOpen: { [weak self] deadline in
                 self?.shortcutOnOpenRunner.runIfConfigured(preferenceKey: ShortcutOnOpenRunner.openPreferenceKey, deadline: deadline) ?? false
@@ -132,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
         }
         if !windowSelfTest && !renderSelfTest && snapshotDirectory == nil {
-            setupMenuBar(); setupDismissal()
+            setupMenuBar(); setupDismissal(); dismissalEnabled = true
             let dayChanges = model.$now.map { Calendar.current.startOfDay(for: $0) }.removeDuplicates()
             dailyStatusObservation = Publishers.CombineLatest(model.$days, dayChanges)
                 .receive(on: RunLoop.main)
@@ -213,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if expanded { model.inspiration.reload(); offerDailyGoal() }
         if expanded && !panelAnimator.isAnimating { compactFrame = panel.frame }
         panelState.expanded = expanded
+        if dismissalEnabled { updateOutsideClickMonitor() }
         let target = expanded
             ? NSRect(x: compactFrame.midX - expandedSize.width / 2, y: compactFrame.maxY - expandedSize.height,
                      width: expandedSize.width, height: expandedSize.height)
@@ -238,14 +243,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if !self.panelState.expanded { self.panel.resignKey() }
         })
     }
-    private func setupDismissal() {
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            let point = NSEvent.mouseLocation
-            Task { @MainActor in
-                guard let self, !self.panel.frame.contains(point) else { return }
-                self.setExpanded(false)
+    /// Clicks in other apps collapse the expanded controls. The system-wide monitor exists
+    /// only while expanded, so a collapsed timer is not woken by every click on the Mac.
+    private func updateOutsideClickMonitor() {
+        if panelState.expanded, globalClickMonitor == nil, !windowSelfTest {
+            globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                let point = NSEvent.mouseLocation
+                Task { @MainActor in
+                    guard let self, !self.panel.frame.contains(point) else { return }
+                    self.setExpanded(false)
+                }
             }
+        } else if !panelState.expanded, let monitor = globalClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalClickMonitor = nil
         }
+    }
+    private func setupDismissal() {
         localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
             if event.type == .keyDown, event.window === self.panel, self.panelState.expanded {
@@ -391,6 +405,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard let observedTimer else { return }
         shortcutLifecycle.timerChanged(from: observedTimer, to: timer)
     }
+    private func finishTerminationIfIdle() {
+        guard !shortcutOnOpenRunner.hasPendingWork, !model.journalIsBusy else { return }
+        finishTerminationRequest()
+    }
     private func finishTerminationRequest() {
         guard terminationPending else { return }
         terminationPending = false
@@ -403,10 +421,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard !preview else { return .terminateNow }
         guard !terminationPending else { return .terminateLater }
         if shortcutLifecycle.shouldRunEndOnQuit(timer: model.timer) { shortcutLifecycle.focusCompleted() }
-        guard shortcutOnOpenRunner.hasPendingWork else { return .terminateNow }
+        // Record anything unfinished, then give the Markdown journal a chance to catch up so
+        // the notes are readable even if Still stays closed. Everything is already in the
+        // local recovery cache, so a timeout loses nothing.
+        if !lifecycleRecorded {
+            lifecycleRecorded = true
+            SessionLifecycle.quitting(model: model, research: research)
+        }
+        model.synchronizeJournal()
+        guard shortcutOnOpenRunner.hasPendingWork || model.journalIsBusy else { return .terminateNow }
 
         terminationPending = true
-        shortcutOnOpenRunner.whenIdle { [weak self] in self?.finishTerminationRequest() }
+        journalQuitObservation = model.$journalIsBusy.dropFirst().filter { !$0 }
+            .sink { [weak self] _ in self?.finishTerminationIfIdle() }
+        shortcutOnOpenRunner.whenIdle { [weak self] in self?.finishTerminationIfIdle() }
         let timeout = DispatchWorkItem { [weak self] in self?.finishTerminationRequest() }
         pendingTerminationTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
@@ -418,6 +446,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return true
     }
     func applicationWillTerminate(_ notification: Notification) {
+        if !preview && !lifecycleRecorded {
+            lifecycleRecorded = true
+            SessionLifecycle.quitting(model: model, research: research)
+        }
+        journalQuitObservation = nil
         panelAnimator.cancel()
         pendingFrameSave?.cancel()
         pendingTerminationTimeout?.cancel()

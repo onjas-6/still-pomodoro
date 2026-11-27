@@ -123,6 +123,14 @@ public struct ResearchPrompt: Equatable, Sendable {
     public let slot: Int
     public let slots: Int
     public let date: Date
+
+    public init(key: String, day: Int, slot: Int, slots: Int, date: Date) {
+        self.key = key
+        self.day = day
+        self.slot = slot
+        self.slots = slots
+        self.date = date
+    }
 }
 
 struct SplitMix64 {

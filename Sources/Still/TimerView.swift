@@ -308,7 +308,6 @@ private struct QuietProgress: View {
     let progress: Double
     let paused: Bool
     let palette: Palette
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
@@ -317,7 +316,8 @@ private struct QuietProgress: View {
                     .frame(width: geometry.size.width * min(1, max(0, progress)))
             }
             .opacity(paused ? 0.4 : 0.8)
-            .animation(reduceMotion || paused ? nil : .linear(duration: 1), value: progress)
+            // No per-second animation: the line moves less than a point each second, and a
+            // one-second linear animation restarted every second redraws at display rate.
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Session progress")

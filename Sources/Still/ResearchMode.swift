@@ -35,8 +35,13 @@ final class ResearchStore: ObservableObject {
     @Published private(set) var error: String?
     private let file: URL
     private let canSave: Bool
+    /// Where the study and the open check-in are kept.
+    let directory: URL
+    let isPreview: Bool
 
     init(directory: URL, preview: Bool) {
+        self.directory = directory
+        isPreview = preview
         file = directory.appendingPathComponent("research-study.json")
         var canSave = !preview
         if !preview, FileManager.default.fileExists(atPath: file.path) {
@@ -75,7 +80,7 @@ final class ResearchStore: ObservableObject {
 }
 
 /// What was on screen when a check-in arrived.
-struct ResearchContext: Sendable {
+struct ResearchContext: Codable, Sendable {
     var appName: String?
     var bundleID: String?
     var windowTitle: String?
@@ -123,7 +128,7 @@ struct ResearchContext: Sendable {
     }
 }
 
-enum ResearchFeeling: String, CaseIterable, Identifiable {
+enum ResearchFeeling: String, CaseIterable, Identifiable, Codable {
     case bored, unclear, worried, frustrated, tired, fine
     var id: String { rawValue }
     var title: String {
@@ -144,8 +149,43 @@ enum ResearchAnswer {
     case skipped
 }
 
+/// What has been entered so far in an open check-in.
+struct ResearchPartial: Codable, Equatable {
+    /// Nil until the first question is answered.
+    var elsewhere: Bool?
+    var feeling: ResearchFeeling?
+    var task = ""
+}
+
+/// The open check-in, mirrored to a small file so a crash or force quit still leaves a record.
+struct ResearchActiveCheckIn: Codable {
+    let studyID: UUID
+    let days: Int
+    let key: String
+    let day: Int
+    let slot: Int
+    let slots: Int
+    let scheduledAt: Date
+    let shownAt: Date
+    var context: ResearchContext?
+    var partial = ResearchPartial()
+
+    init(study: ResearchStudy, prompt: ResearchPrompt, shownAt: Date) {
+        studyID = study.id
+        days = study.days
+        key = prompt.key
+        day = prompt.day
+        slot = prompt.slot
+        slots = prompt.slots
+        scheduledAt = prompt.date
+        self.shownAt = shownAt
+    }
+
+    var prompt: ResearchPrompt { ResearchPrompt(key: key, day: day, slot: slot, slots: slots, date: scheduledAt) }
+}
+
 struct ResearchStats {
-    var due = 0, answered = 0, elsewhere = 0, onTrack = 0, missed = 0, skipped = 0, expired = 0, inFocus = 0
+    var due = 0, answered = 0, elsewhere = 0, onTrack = 0, missed = 0, skipped = 0, expired = 0, inFocus = 0, interrupted = 0
 
     var summary: String {
         let share = answered > 0 ? " (\(Int((Double(elsewhere) / Double(answered) * 100).rounded()))% of answers)" : ""
@@ -154,6 +194,9 @@ struct ResearchStats {
 }
 
 /// Schedules check-ins, shows them when you are at the Mac, and records every outcome.
+///
+/// Resource use: a 15-second timer (with 5 s tolerance) runs only while a study is active;
+/// the schedule is computed once per study; window details are read once per check-in.
 @MainActor
 final class ResearchSampler {
     enum Kind {
@@ -170,35 +213,58 @@ final class ResearchSampler {
     let store: ResearchStore
     private weak var model: AppModel?
     private let panel = ResearchPromptPanel()
+    private let activeFile: URL?
+    private let launchedAt: Date
     private var tick: AnyCancellable?
-    private var wake: AnyCancellable?
-    private var active: (prompt: ResearchPrompt, shownAt: Date, context: ResearchContext?)?
-    private var pending: Set<String> = []
+    private var power: [AnyCancellable] = []
+    private var sleepStarted: Date?
+    private var sleeps: [ClosedRange<Date>] = []
+    private var active: ResearchActiveCheckIn?
+    private var pending: [String: PendingRecord] = [:]
     private var practicing = false
+    private var partialSave: DispatchWorkItem?
+    private var cachedSchedule: (id: UUID, stoppedAt: Date?, prompts: [ResearchPrompt])?
     private let desktop = InactivityEnvironment()
 
-    init(model: AppModel, store: ResearchStore) {
+    private struct PendingRecord {
+        let prompt: ResearchPrompt
+        let outcome: Outcome
+        let extra: [String: String]
+        let at: Date
+    }
+
+    private enum Outcome: String {
+        case answered, skipped, expired, missed, interrupted
+        case inFocus = "in-focus"
+    }
+
+    init(model: AppModel, store: ResearchStore, launchedAt: Date = Date()) {
         self.model = model
         self.store = store
+        self.launchedAt = launchedAt
+        activeFile = model.isPreview || store.isPreview ? nil : store.directory.appendingPathComponent("research-active.json")
         panel.answer = { [weak self] answer in self?.finish(answer) }
+        panel.partial = { [weak self] partial in self?.updatePartial(partial) }
         guard !model.isPreview else { return }
-        // AppModel's clock only publishes while a timer runs, so check-ins keep their own
-        // low-frequency clock. The tolerance lets macOS coalesce it with other wakeups.
-        tick = Timer.publish(every: 15, tolerance: 5, on: .main, in: .common).autoconnect()
-            .sink { [weak self] now in self?.evaluate(at: now) }
-        wake = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.evaluate(at: Date()) }
+        recoverInterruptedCheckIn()
+        let center = NSWorkspace.shared.notificationCenter
+        power = [
+            center.publisher(for: NSWorkspace.willSleepNotification).receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.sleepStarted = Date() },
+            center.publisher(for: NSWorkspace.didWakeNotification).receive(on: RunLoop.main)
+                .sink { [weak self] _ in
+                    guard let self else { return }
+                    if let start = self.sleepStarted { self.sleeps.append(start...Date()) }
+                    self.sleepStarted = nil
+                    self.evaluate(at: Date())
+                }
+        ]
+        updateClock()
     }
 
     var study: ResearchStudy? { store.settings.study }
 
-    /// Shows the check-in panel once without recording anything.
-    func practice() {
-        guard active == nil else { return }
-        practicing = true
-        panel.present(caption: "Practice check-in · not recorded")
-    }
+    func isRunning(at now: Date = Date()) -> Bool { study?.isActive(at: now) ?? false }
 
     func start(at now: Date = Date()) {
         guard let model else { return }
@@ -221,21 +287,30 @@ final class ResearchSampler {
         study.stoppedAt = now
         store.update { $0.study = study }
         // Anything already due but never shown counts as missed, so the summary is complete.
-        for prompt in openPrompts(in: study, at: now) { record(prompt, .missed, context: nil, at: now) }
+        for prompt in openPrompts(in: study, at: now) { recordMissed(prompt, at: now) }
         recordEndIfNeeded(study, at: now)
+        updateClock()
     }
 
     /// Forget a finished study so a new one can be configured. Its notes stay in the journal.
     func clear() {
         guard let study = store.settings.study, !study.isActive(at: Date()) else { return }
         store.update { $0.study = nil }
+        updateClock()
+    }
+
+    /// Shows the check-in panel once without recording anything.
+    func practice() {
+        guard active == nil else { return }
+        practicing = true
+        panel.present(caption: "Practice check-in · not recorded")
     }
 
     func stats(at now: Date = Date()) -> ResearchStats {
         guard let study, let model else { return ResearchStats() }
         let id = study.id.uuidString
         var stats = ResearchStats()
-        stats.due = study.prompts(through: now).count
+        stats.due = due(in: study, through: now).count
         for note in model.notes where note.kind == Kind.checkIn && note["study"] == id {
             switch note["outcome"] {
             case Outcome.answered.rawValue:
@@ -245,6 +320,7 @@ final class ResearchSampler {
             case Outcome.skipped.rawValue: stats.skipped += 1
             case Outcome.expired.rawValue: stats.expired += 1
             case Outcome.inFocus.rawValue: stats.inFocus += 1
+            case Outcome.interrupted.rawValue: stats.interrupted += 1
             default: break
             }
         }
@@ -254,41 +330,61 @@ final class ResearchSampler {
     /// A one-line status for the menu bar and Preferences, or nil when no study is running.
     func status(at now: Date = Date()) -> String? {
         guard let study, study.isActive(at: now), let day = study.dayNumber(at: now) else { return nil }
-        let stats = stats(at: now)
-        return "Research · day \(day) of \(study.days) · \(stats.answered) answered"
+        return "Research · day \(day) of \(study.days) · \(stats(at: now).answered) answered"
+    }
+
+    /// Called when Still quits. Records the open check-in with whatever was entered and any
+    /// record still waiting for window details. Synchronous, so it finishes before exit.
+    func recordInterruption(reason: String, at now: Date = Date()) {
+        guard let model, !model.isPreview else { return }
+        if practicing {
+            practicing = false
+            panel.present(caption: nil)
+        }
+        if let active {
+            self.active = nil
+            panel.present(caption: nil)
+            removeActiveFile()
+            record(interrupted: active, reason: reason, at: now)
+        }
+        for (key, record) in pending {
+            pending[key] = nil
+            var extra = record.extra
+            extra["context"] = "not captured before Still quit"
+            self.record(record.prompt, record.outcome, context: nil, extra: extra, at: record.at)
+        }
     }
 
     // MARK: - Scheduling
 
-    private enum Outcome: String {
-        case answered, skipped, expired, missed
-        case inFocus = "in-focus"
-    }
-
     func evaluate(at now: Date) {
         guard let model, !model.isPreview else { return }
+        defer { updateClock() }
         guard let study else { closeActive(as: .expired, at: now); return }
         if now >= study.end {
             closeActive(as: .expired, at: now)
-            recordMissed(in: study, at: now)
+            for prompt in openPrompts(in: study, at: now) where now.timeIntervalSince(prompt.date) > Self.lateLimit {
+                recordMissed(prompt, at: now)
+            }
             // The last check-ins keep their grace period before the study is summarized.
             if study.stoppedAt != nil || now >= study.end.addingTimeInterval(Self.lateLimit) {
                 recordEndIfNeeded(study, at: now)
             }
             return
         }
-        recordMissed(in: study, at: now)
+        for prompt in openPrompts(in: study, at: now) where now.timeIntervalSince(prompt.date) > Self.lateLimit {
+            recordMissed(prompt, at: now)
+        }
         if let active {
             if now.timeIntervalSince(active.shownAt) > Self.answerLimit { closeActive(as: .expired, at: now) }
             return
         }
-        guard !practicing else { return }
-        guard let next = openPrompts(in: study, at: now).first(where: { now.timeIntervalSince($0.date) <= Self.lateLimit }) else {
-            return
-        }
+        guard !practicing,
+              let next = openPrompts(in: study, at: now).first(where: { now.timeIntervalSince($0.date) <= Self.lateLimit })
+        else { return }
         if model.timer.mode == .focus && model.timer.phase == .running {
             // Already doing the intended thing: record the context without interrupting.
-            capture(next) { [weak self] context in self?.record(next, .inFocus, context: context, at: Date()) }
+            capture(next, as: .inFocus, extra: [:], at: Date())
             return
         }
         guard desktop.desktopAvailable(), FocusInactivity.inputIdleSeconds() < Self.idleLimit,
@@ -296,28 +392,81 @@ final class ResearchSampler {
         present(next, in: study, at: now)
     }
 
-    private func openPrompts(in study: ResearchStudy, at now: Date) -> [ResearchPrompt] {
-        let recorded = Set(model?.notes.filter { $0.kind == Kind.checkIn }.compactMap { $0["prompt"] } ?? [])
-        return study.prompts(through: now).filter {
-            !recorded.contains($0.key) && !pending.contains($0.key) && $0.key != active?.prompt.key
+    /// The clock runs only while a study is active or still waiting for its summary.
+    private func updateClock() {
+        guard let model, !model.isPreview else { return }
+        let needed = study.map { study in
+            !model.notes.contains { $0.kind == Kind.study && $0["study"] == study.id.uuidString && $0["event"] == "ended" }
+        } ?? false
+        if needed, tick == nil {
+            tick = Timer.publish(every: 15, tolerance: 5, on: .main, in: .common).autoconnect()
+                .sink { [weak self] now in self?.evaluate(at: now) }
+        } else if !needed {
+            tick = nil
         }
     }
 
-    private func recordMissed(in study: ResearchStudy, at now: Date) {
-        for prompt in openPrompts(in: study, at: now) where now.timeIntervalSince(prompt.date) > Self.lateLimit {
-            record(prompt, .missed, context: nil, at: now)
+    /// The study's full schedule, computed once per study.
+    private func schedule(_ study: ResearchStudy) -> [ResearchPrompt] {
+        if let cached = cachedSchedule, cached.id == study.id, cached.stoppedAt == study.stoppedAt { return cached.prompts }
+        let prompts = study.allPrompts()
+        cachedSchedule = (study.id, study.stoppedAt, prompts)
+        return prompts
+    }
+
+    private func due(in study: ResearchStudy, through now: Date) -> [ResearchPrompt] {
+        let last = min(now, study.end)
+        guard last > study.startedAt else { return [] }
+        return schedule(study).filter { $0.date <= last }
+    }
+
+    private func openPrompts(in study: ResearchStudy, at now: Date) -> [ResearchPrompt] {
+        let recorded = Set(model?.notes.filter { $0.kind == Kind.checkIn }.compactMap { $0["prompt"] } ?? [])
+        return due(in: study, through: now).filter {
+            !recorded.contains($0.key) && pending[$0.key] == nil && $0.key != active?.key
         }
+    }
+
+    private func recordMissed(_ prompt: ResearchPrompt, at now: Date) {
+        record(prompt, .missed, context: nil, extra: ["missedReason": missedReason(at: prompt.date)], at: now)
+    }
+
+    /// Why nobody saw a check-in: Still was not running, the Mac slept, or you were away.
+    private func missedReason(at date: Date) -> String {
+        if date < launchedAt { return "still-not-running" }
+        if sleeps.contains(where: { $0.contains(date) }) { return "mac-asleep" }
+        if let sleepStarted, date >= sleepStarted { return "mac-asleep" }
+        return "away"
     }
 
     private func present(_ prompt: ResearchPrompt, in study: ResearchStudy, at now: Date) {
         guard let model else { return }
-        active = (prompt, now, nil)
+        active = ResearchActiveCheckIn(study: study, prompt: prompt, shownAt: now)
+        saveActive()
         panel.present(caption: "Check-in \(prompt.slot) of \(prompt.slots) today · day \(prompt.day) of \(study.days)")
         if model.preferences.soundEnabled { model.playTone(model.preferences.inactivityTone) }
         let key = prompt.key
         Task { [weak self] in
             let context = await ResearchContext.capture()
-            if let self, self.active?.prompt.key == key { self.active?.context = context }
+            guard let self, self.active?.key == key else { return }
+            self.active?.context = context
+            self.saveActive()
+        }
+    }
+
+    private func updatePartial(_ partial: ResearchPartial) {
+        guard !practicing, var active, active.partial != partial else { return }
+        let answeredNow = active.partial.elsewhere != partial.elsewhere || active.partial.feeling != partial.feeling
+        active.partial = partial
+        self.active = active
+        // Choices are saved at once; typing is saved after a short pause.
+        partialSave?.cancel()
+        if answeredNow {
+            saveActive()
+        } else {
+            let work = DispatchWorkItem { [weak self] in self?.saveActive() }
+            partialSave = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
         }
     }
 
@@ -350,42 +499,61 @@ final class ResearchSampler {
 
     private func closeActive(as outcome: Outcome, at now: Date) {
         guard let active else { return }
-        close(active, as: outcome, extra: ["shownAt": Self.iso(active.shownAt)], at: now)
+        var extra = ["shownAt": Self.iso(active.shownAt)]
+        extra.merge(Self.partialFields(active.partial)) { $1 }
+        close(active, as: outcome, extra: extra, at: now)
     }
 
-    private func close(_ active: (prompt: ResearchPrompt, shownAt: Date, context: ResearchContext?),
-                       as outcome: Outcome, extra: [String: String], at now: Date) {
+    private func close(_ active: ResearchActiveCheckIn, as outcome: Outcome, extra: [String: String], at now: Date) {
         self.active = nil
+        partialSave?.cancel()
+        removeActiveFile()
         panel.present(caption: nil)
         if let context = active.context {
             record(active.prompt, outcome, context: context, extra: extra, at: now)
         } else {
             // Answered before the window details arrived; record them as soon as they do.
-            capture(active.prompt) { [weak self] context in
-                self?.record(active.prompt, outcome, context: context, extra: extra, at: now)
-            }
+            capture(active.prompt, as: outcome, extra: extra, at: now)
         }
     }
 
-    private func capture(_ prompt: ResearchPrompt, then finish: @escaping (ResearchContext) -> Void) {
-        pending.insert(prompt.key)
+    private func capture(_ prompt: ResearchPrompt, as outcome: Outcome, extra: [String: String], at now: Date) {
+        pending[prompt.key] = PendingRecord(prompt: prompt, outcome: outcome, extra: extra, at: now)
         Task { [weak self] in
             let context = await ResearchContext.capture()
-            guard let self else { return }
-            self.pending.remove(prompt.key)
-            finish(context)
+            guard let self, let record = self.pending.removeValue(forKey: prompt.key) else { return }
+            self.record(record.prompt, record.outcome, context: context, extra: record.extra, at: record.at)
         }
+    }
+
+    /// A check-in cut short by a quit or crash keeps whatever was already answered.
+    private func record(interrupted active: ResearchActiveCheckIn, reason: String, at now: Date) {
+        var extra = ["shownAt": Self.iso(active.shownAt), "interruptedBy": reason]
+        extra.merge(Self.partialFields(active.partial)) { $1 }
+        let outcome: Outcome = active.partial.elsewhere == nil ? .interrupted : .answered
+        if outcome == .answered { extra["complete"] = "no" }
+        record(active.prompt, outcome, context: active.context, extra: extra, at: now,
+               studyID: active.studyID, days: active.days)
+    }
+
+    private static func partialFields(_ partial: ResearchPartial) -> [String: String] {
+        var fields: [String: String] = [:]
+        if let elsewhere = partial.elsewhere { fields["elsewhere"] = elsewhere ? "yes" : "no" }
+        fields["feeling"] = partial.feeling?.rawValue
+        let task = partial.task.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !task.isEmpty { fields["task"] = task }
+        return fields
     }
 
     private func record(_ prompt: ResearchPrompt, _ outcome: Outcome, context: ResearchContext?,
-                        extra: [String: String] = [:], at now: Date) {
-        guard let model, let study else { return }
+                        extra: [String: String] = [:], at now: Date, studyID: UUID? = nil, days: Int? = nil) {
+        guard let model, let id = studyID ?? study?.id, let days = days ?? study?.days else { return }
         var fields = context?.fields ?? [:]
         fields.merge(extra) { $1 }
-        fields["study"] = study.id.uuidString
+        fields["study"] = id.uuidString
         fields["prompt"] = prompt.key
         fields["day"] = "\(prompt.day)"
-        fields["days"] = "\(study.days)"
+        fields["days"] = "\(days)"
         fields["slot"] = "\(prompt.slot)"
         fields["slots"] = "\(prompt.slots)"
         fields["scheduledAt"] = Self.iso(prompt.date)
@@ -401,11 +569,21 @@ final class ResearchSampler {
         case .answered: detail = "On track"
         case .skipped: detail = "Skipped"
         case .expired: detail = "No answer"
-        case .missed: detail = "Missed (away from the Mac)"
+        case .missed:
+            switch fields["missedReason"] {
+            case "still-not-running": detail = "Missed (Still was not running)"
+            case "mac-asleep": detail = "Missed (Mac asleep)"
+            default: detail = "Missed (away from the Mac)"
+            }
         case .inFocus: detail = "In a focus session"
+        case .interrupted: detail = "Interrupted before an answer"
+        }
+        if fields["complete"] == "no" { detail += " · unfinished" }
+        if let reason = fields["interruptedBy"] {
+            detail += reason == "quit" ? " (Still quit)" : " (Still closed unexpectedly)"
         }
         if let context { detail += " · " + context.label }
-        let summary = "Research check-in · day \(prompt.day) of \(study.days) · \(prompt.slot)/\(prompt.slots) · " + detail
+        let summary = "Research check-in · day \(prompt.day) of \(days) · \(prompt.slot)/\(prompt.slots) · " + detail
         model.addNote(StillNote(kind: Kind.checkIn, at: now, summary: summary, fields: fields))
     }
 
@@ -420,7 +598,29 @@ final class ResearchSampler {
             fields: ["study": study.id.uuidString, "event": "ended", "reason": reason,
                      "due": "\(stats.due)", "answered": "\(stats.answered)", "elsewhere": "\(stats.elsewhere)",
                      "onTrack": "\(stats.onTrack)", "missed": "\(stats.missed)", "skipped": "\(stats.skipped)",
-                     "expired": "\(stats.expired)", "inFocus": "\(stats.inFocus)"]))
+                     "expired": "\(stats.expired)", "inFocus": "\(stats.inFocus)",
+                     "interrupted": "\(stats.interrupted)"]))
+    }
+
+    // MARK: - Crash safety
+
+    private func saveActive() {
+        guard let activeFile, let active, let data = try? JSONEncoder().encode(active) else { return }
+        try? data.write(to: activeFile, options: .atomic)
+    }
+
+    private func removeActiveFile() {
+        guard let activeFile else { return }
+        try? FileManager.default.removeItem(at: activeFile)
+    }
+
+    /// A check-in file left behind means Still ended without closing it: record it now.
+    private func recoverInterruptedCheckIn() {
+        guard let activeFile, let data = try? Data(contentsOf: activeFile) else { return }
+        removeActiveFile()
+        guard let saved = try? JSONDecoder().decode(ResearchActiveCheckIn.self, from: data),
+              let model, !model.notes.contains(where: { $0.kind == Kind.checkIn && $0["prompt"] == saved.key }) else { return }
+        record(interrupted: saved, reason: "unexpected-exit", at: Date())
     }
 
     static func window(_ study: ResearchStudy) -> String {
@@ -429,7 +629,7 @@ final class ResearchSampler {
 
     static func clock(_ minute: Int) -> String { String(format: "%02d:%02d", minute / 60, minute % 60) }
 
-    private static func iso(_ date: Date) -> String {
+    static func iso(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.timeZone = .current
         formatter.formatOptions = [.withInternetDateTime]
@@ -442,11 +642,13 @@ final class ResearchSampler {
 @MainActor
 final class ResearchPromptPanel {
     var answer: ((ResearchAnswer) -> Void)?
+    var partial: ((ResearchPartial) -> Void)?
     private var panel: NSPanel?
 
     func present(caption: String?) {
         guard let caption else {
             panel?.orderOut(nil)
+            panel?.contentView = nil
             panel = nil
             return
         }
@@ -462,7 +664,8 @@ final class ResearchPromptPanel {
         window.level = .statusBar
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: ResearchPromptView(caption: caption) { [weak self] in self?.answer?($0) })
+        let hosting = NSHostingView(rootView: ResearchPromptView(
+            caption: caption, answer: { [weak self] in self?.answer?($0) }, partial: { [weak self] in self?.partial?($0) }))
         window.contentView = hosting
         let size = hosting.fittingSize
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
@@ -473,22 +676,22 @@ final class ResearchPromptPanel {
         window.orderFrontRegardless()
         panel = window
     }
-
-    /// For layout review only: the hosting view of the visible panel.
-    var contentView: NSView? { panel?.contentView }
 }
 
 struct ResearchPromptView: View {
     let caption: String
     let answer: (ResearchAnswer) -> Void
+    let partial: (ResearchPartial) -> Void
     @StoredViewState private var askingWhy: Bool
     @StoredViewState private var feeling: ResearchFeeling? = nil
     @StoredViewState private var task = ""
     private let accent = Color(red: 0.55, green: 0.63, blue: 0.55)
 
-    init(caption: String, askingWhy: Bool = false, answer: @escaping (ResearchAnswer) -> Void) {
+    init(caption: String, askingWhy: Bool = false, answer: @escaping (ResearchAnswer) -> Void,
+         partial: @escaping (ResearchPartial) -> Void = { _ in }) {
         self.caption = caption
         self.answer = answer
+        self.partial = partial
         _askingWhy = StoredViewState(initialValue: askingWhy)
     }
 
@@ -505,6 +708,12 @@ struct ResearchPromptView: View {
         .foregroundStyle(.white).colorScheme(.dark)
         .background(RoundedRectangle(cornerRadius: 18).fill(Color(red: 0.14, green: 0.17, blue: 0.16)))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(accent.opacity(0.8), lineWidth: 1.5))
+        .onChange(of: feeling) { _, _ in reportPartial() }
+        .onChange(of: task) { _, _ in reportPartial() }
+    }
+
+    private func reportPartial() {
+        partial(ResearchPartial(elsewhere: askingWhy ? true : nil, feeling: feeling, task: task))
     }
 
     private var question: some View {
@@ -514,7 +723,7 @@ struct ResearchPromptView: View {
                 .accessibilityAddTraits(.isHeader)
             HStack(spacing: 8) {
                 Button("No, this is it") { answer(.onTrack) }.keyboardShortcut("n", modifiers: [])
-                Button("Yes") { askingWhy = true }.keyboardShortcut("y", modifiers: [])
+                Button("Yes") { askingWhy = true; reportPartial() }.keyboardShortcut("y", modifiers: [])
                 Spacer()
                 Button("Skip") { answer(.skipped) }.buttonStyle(.link).foregroundStyle(.white.opacity(0.6))
             }

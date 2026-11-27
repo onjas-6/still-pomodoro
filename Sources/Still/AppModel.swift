@@ -32,7 +32,11 @@ private enum JournalSyncResult: Sendable {
 
 @MainActor
 final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
-    @Published private(set) var timer = TimerState()
+    @Published private(set) var timer = TimerState() {
+        didSet {
+            if oldValue.phase != timer.phase || oldValue.deadline != timer.deadline { rescheduleClock() }
+        }
+    }
     private var entries = JournalEntries() {
         didSet { days = FocusDay.history(entries) }
     }
@@ -58,7 +62,9 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     @Published var journalError: String?
     @Published private(set) var journalIsBusy = false
     var onWindowPreferencesChanged: (() -> Void)?
-    private var pulse: AnyCancellable?
+    private var clockTimer: Timer?
+    /// Seconds between clock checks: 1 while a timer runs, longer while idle. Exposed for tests.
+    var clockInterval: TimeInterval? { clockTimer?.timeInterval }
     let playTone: (AlertTone) -> Void
     private var notificationGeneration = 0
     private var restNotificationGeneration = 0
@@ -104,9 +110,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         if let session = timer.tick(at: now) { add(session) }
         if restoringRunningTimer && timer.phase == .completed { persist() }
         refreshRestReminder(to: now)
-        pulse = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect().sink { [weak self] date in
-            self?.refreshClock(to: date)
-        }
+        rescheduleClock()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(timeZoneChanged), name: .NSSystemTimeZoneDidChange, object: nil)
         if managesSystemNotifications {
@@ -304,6 +308,31 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     func shouldPlayDirectChime(for completedMode: TimerMode) -> Bool {
         completedMode == .focus && preferences.soundEnabled
     }
+    /// While a timer runs, wake once per second exactly when the displayed second changes
+    /// (and at the deadline). Otherwise wake rarely: the bedtime window, its five-minute
+    /// snooze and midnight only need minute-level precision.
+    private func rescheduleClock() {
+        clockTimer?.invalidate()
+        let next: Timer
+        if timer.phase == .running, let deadline = timer.deadline {
+            let now = Date()
+            let fraction = deadline.timeIntervalSince(now).truncatingRemainder(dividingBy: 1)
+            let first = now.addingTimeInterval((fraction > 0 ? fraction : 1) + 0.01)
+            next = Timer(fire: first, interval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshClock(to: Date()) }
+            }
+            next.tolerance = 0.03
+        } else {
+            next = Timer(timeInterval: Self.idleClockInterval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshClock(to: Date()) }
+            }
+            next.tolerance = 5
+        }
+        RunLoop.main.add(next, forMode: .common)
+        clockTimer = next
+    }
+    static let idleClockInterval: TimeInterval = 20
+
     func refreshClock(to date: Date) {
         let second = Int(date.timeIntervalSince1970)
         if lastRestCheckSecond != second {
