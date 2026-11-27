@@ -37,12 +37,28 @@ enum BrowserLocation {
     /// Only consider a committed web document. Search terms, window titles and text
     /// fields (including partly typed addresses) never participate in matching.
     private static func host(pid: pid_t) -> String? {
-        let app = AXUIElementCreateApplication(pid)
+        guard let root = focusedWindow(AXUIElementCreateApplication(pid)),
+              attribute(root, kAXMinimizedAttribute) as? Bool != true else { return nil }
+        return webURL(in: root)?.host.flatMap(FocusTargets.domain)
+    }
+
+    /// The focused window's title and the address it shows: a web page in browsers, or a
+    /// document file in apps that expose one. Used only for research check-ins.
+    static func windowContext(pid: pid_t, isBrowser: Bool) -> (title: String?, url: URL?) {
+        guard AXIsProcessTrusted(), let root = focusedWindow(AXUIElementCreateApplication(pid)) else { return (nil, nil) }
+        let title = (attribute(root, kAXTitleAttribute) as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let url = isBrowser ? webURL(in: root) : attribute(root, kAXDocumentAttribute).flatMap(urlValue)
+        return (title, url)
+    }
+
+    private static func focusedWindow(_ app: AXUIElement) -> AXUIElement? {
         guard let window = attribute(app, kAXFocusedWindowAttribute) ?? attribute(app, kAXMainWindowAttribute),
               CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
-        let root = window as! AXUIElement
-        guard attribute(root, kAXMinimizedAttribute) as? Bool != true else { return nil }
-        if let document = attribute(root, kAXDocumentAttribute), let host = webHost(document) { return host }
+        return (window as! AXUIElement)
+    }
+
+    private static func webURL(in root: AXUIElement) -> URL? {
+        if let document = attribute(root, kAXDocumentAttribute), let url = webURLValue(document) { return url }
 
         // Some browsers expose the address on the visible web area's root. Never
         // descend into page content, or select a link or background tab by title.
@@ -54,7 +70,7 @@ enum BrowserLocation {
             index += 1
             let role = attribute(element, kAXRoleAttribute) as? String
             if role == "AXWebArea" {
-                return attribute(element, kAXURLAttribute).flatMap(webHost)
+                return attribute(element, kAXURLAttribute).flatMap(webURLValue)
             }
             guard let role, ["AXWindow", "AXGroup", "AXSplitGroup", "AXScrollArea",
                               "AXTabGroup", "AXUnknown"].contains(role) else { continue }
@@ -75,9 +91,12 @@ enum BrowserLocation {
         return value
     }
 
-    private static func webHost(_ value: CFTypeRef) -> String? {
-        let url = value as? URL ?? (value as? String).flatMap(URL.init(string:))
-        guard let url, ["http", "https"].contains(url.scheme?.lowercased()), let host = url.host else { return nil }
-        return FocusTargets.domain(host)
+    private static func urlValue(_ value: CFTypeRef) -> URL? {
+        value as? URL ?? (value as? String).flatMap(URL.init(string:))
+    }
+
+    private static func webURLValue(_ value: CFTypeRef) -> URL? {
+        guard let url = urlValue(value), ["http", "https"].contains(url.scheme?.lowercased()), url.host != nil else { return nil }
+        return url
     }
 }

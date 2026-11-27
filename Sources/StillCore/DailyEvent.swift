@@ -34,23 +34,28 @@ public struct DailyEvent: Codable, Equatable, Identifiable, Sendable {
 public struct JournalEntries: Sendable {
     public var sessions: [FocusSession]
     public var events: [DailyEvent]
+    public var notes: [StillNote]
 
-    public init(sessions: [FocusSession] = [], events: [DailyEvent] = []) {
+    public init(sessions: [FocusSession] = [], events: [DailyEvent] = [], notes: [StillNote] = []) {
         self.sessions = sessions
         self.events = events
+        self.notes = notes
     }
 
-    public var isEmpty: Bool { sessions.isEmpty && events.isEmpty }
+    public var isEmpty: Bool { sessions.isEmpty && events.isEmpty && notes.isEmpty }
 
     public func missing(from existing: JournalEntries) -> JournalEntries {
         var sessionIDs = Set(existing.sessions.map(\.id))
         var eventIDs = Set(existing.events.map(\.id))
+        var noteIDs = Set(existing.notes.map(\.id))
         return JournalEntries(sessions: sessions.filter { sessionIDs.insert($0.id).inserted },
-                              events: events.filter { eventIDs.insert($0.id).inserted })
+                              events: events.filter { eventIDs.insert($0.id).inserted },
+                              notes: notes.filter { noteIDs.insert($0.id).inserted })
     }
 
     public mutating func append(_ missing: JournalEntries) {
         sessions.append(contentsOf: missing.sessions)
         events.append(contentsOf: missing.events)
+        notes.append(contentsOf: missing.notes)
     }
 }

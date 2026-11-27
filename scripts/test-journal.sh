@@ -13,6 +13,7 @@ trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
 swiftc \
     "$PROJECT_ROOT/Sources/StillCore/StillCore.swift" \
     "$PROJECT_ROOT/Sources/StillCore/DailyEvent.swift" \
+    "$PROJECT_ROOT/Sources/StillCore/StillNote.swift" \
     "$PROJECT_ROOT/Sources/StillCore/MarkdownJournal.swift" \
     "$SCRIPT_DIR/test-journal.swift" \
     -o "$TEMP_DIR/test-journal"

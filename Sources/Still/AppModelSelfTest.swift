@@ -43,12 +43,13 @@ enum AppModelSelfTest {
             testQuietClock(in: root.appendingPathComponent("quiet-clock", isDirectory: true), recorder: &recorder)
             testRestReminder(in: root.appendingPathComponent("rest-reminder", isDirectory: true), recorder: &recorder)
             testStayAwake(in: root.appendingPathComponent("stay-awake", isDirectory: true), recorder: &recorder)
+            testResearchMode(in: root.appendingPathComponent("research", isDirectory: true), recorder: &recorder)
         } catch {
             recorder.fail("Unable to create self-test workspace: \(error)")
         }
 
         if recorder.failures.isEmpty {
-            print("AppModel self-test passed: 23 test groups")
+            print("AppModel self-test passed: 24 test groups")
             return 0
         }
 
@@ -818,6 +819,51 @@ enum AppModelSelfTest {
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: midnight)!
         recorder.check(restored.takeDailyGoalPrompt(at: tomorrow) && !restored.takeDailyGoalPrompt(at: tomorrow),
                        "daily: the next local day prompts exactly once")
+    }
+
+    /// Every scheduled check-in leaves exactly one note, relaunches never duplicate them,
+    /// stopping writes one summary, and the notes reach the Markdown journal.
+    private static func testResearchMode(in directory: URL, recorder: inout Recorder) {
+        let model = AppModel(dataDirectory: directory, syncJournalOnLaunch: false, playTone: { _ in })
+        let store = ResearchStore(directory: directory, preview: false)
+        let now = Date()
+        let past = ResearchStudy(startedAt: now.addingTimeInterval(-4 * 86_400), days: 3, promptsPerDay: 4)
+        store.update { $0.study = past }
+        let sampler = ResearchSampler(model: model, store: store)
+        sampler.evaluate(at: now)
+        let expected = past.allPrompts().count
+        let checkIns = { model.notes.filter { $0.kind == ResearchSampler.Kind.checkIn } }
+        recorder.check(expected > 0 && checkIns().count == expected, "research: every past check-in is recorded once (\(checkIns().count)/\(expected))")
+        recorder.check(checkIns().allSatisfy { $0["outcome"] == "missed" && $0["study"] == past.id.uuidString },
+                       "research: check-ins while Still was not running are recorded as missed")
+        let endings = { model.notes.filter { $0.kind == ResearchSampler.Kind.study && $0["event"] == "ended" } }
+        recorder.check(endings().count == 1 && endings().first?["due"] == "\(expected)",
+                       "research: a finished study writes one summary with its totals")
+
+        // A relaunch with the same store and notes must not add anything.
+        let reopened = ResearchSampler(model: model, store: ResearchStore(directory: directory, preview: false))
+        reopened.evaluate(at: now.addingTimeInterval(60))
+        recorder.check(checkIns().count == expected && endings().count == 1, "research: relaunching does not duplicate notes")
+        recorder.check(reopened.study?.id == past.id, "research: the study survives a relaunch")
+
+        // A new study can start once the old one is finished, and stopping summarizes it.
+        reopened.clear()
+        recorder.check(reopened.study == nil, "research: a finished study can be cleared")
+        reopened.start(at: now)
+        recorder.check(reopened.status(at: now.addingTimeInterval(1)) != nil, "research: a running study reports its status")
+        reopened.stop(at: now.addingTimeInterval(120))
+        recorder.check(endings().count == 2 && reopened.status(at: now.addingTimeInterval(180)) == nil,
+                       "research: stopping ends the study with a second summary")
+        let starts = model.notes.filter { $0.kind == ResearchSampler.Kind.study && $0["event"] == "started" }
+        recorder.check(starts.count == 1, "research: starting a study is recorded")
+
+        // Notes reach the Markdown journal and come back from it.
+        recorder.check(model.setJournalPath(model.preferences.journalPath), "research: the journal accepts notes")
+        let journal = (try? MarkdownJournal.readEntries(from: URL(fileURLWithPath: model.preferences.journalPath)))?.notes ?? []
+        recorder.check(journal.count == model.notes.count && journal.count >= expected + 3,
+                       "research: every note is in the Markdown journal (\(journal.count))")
+        let restored = AppModel(dataDirectory: directory, syncJournalOnLaunch: false)
+        recorder.check(restored.notes.count == model.notes.count, "research: notes survive in the local recovery cache")
     }
 
     private static func testMySpaceAlias(in directory: URL, recorder: inout Recorder) throws {

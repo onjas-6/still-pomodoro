@@ -40,7 +40,7 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   can use that time as the system Focus expiry, including when you quit Still. When there
   is no running focus deadline, it receives no input. In the ending shortcut, check the
   current Focus before turning it off so a different mode you selected stays active.
-- **Choose your sounds.** In **Preferences → Alerts**, choose and preview separate sounds
+- **Choose your sounds.** In **Preferences → Bedtime & alerts → Sounds**, choose and preview separate sounds
   for timer endings and inactivity. Try a felt piano, kalimba, glass bell, or wood block,
   or keep Still's original sounds. Each **Preview** button works even with automatic sounds off.
 - **Focus reminders.** Opening a listed app or website during focus shows **You need to focus.**
@@ -53,6 +53,15 @@ softer seconds on a translucent surface. No accounts, analytics, or network requ
   audible reminder. Return to the keyboard or trackpad, acknowledge the panel, or snooze it.
   In **Preferences → Focus reminders**, choose Off, 1, 3, 5, or 10 minutes.
   The check uses elapsed input time on the Mac. Reading and thinking can also trigger it.
+- **Research mode.** A two-week experience-sampling study of your own procrastination.
+  At four random moments a day (10:00–23:00 by default), Still asks **Is there something
+  else you should be doing right now?** If yes, choose how that task feels and, optionally,
+  what it is. Each answer is saved to your Markdown journal with the app, window title and
+  page you were on. Check-ins that arrive during a focus session, go unanswered or are missed
+  while you are away are recorded too, so the record has no gaps. Times are random and
+  never shown in advance. Start, stop and practice it under **Preferences → Research mode**.
+  Window titles and pages need Accessibility access. See
+  [docs/procrastination-method.md](docs/procrastination-method.md) for the reasoning.
 - **Bedtime reminder.** Set a daily stop-work window (00:00–08:00 by default). A visible,
   softly pulsing reminder returns after a 5-minute delay, even if the timer is hidden.
   You can write your own short message. A daily start notification is available when
@@ -89,21 +98,25 @@ your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewher
 
 1. Click the small countdown, then **30 min**, **45 min**, or **60 min** to start.
 2. Click it again to pause, continue, reset, start a break, or open preferences.
-3. In Preferences, choose **System / Light / Dark**, timer size, and background opacity.
+3. Preferences has six groups, in this order: **Focus**, **Focus reminders**,
+   **Research mode**, **Bedtime & alerts**, **Appearance**, and **Journal & Mac**. The links under the title
+   jump to each group. Under **Appearance**, choose **System / Light / Dark**, timer size,
+   and background opacity.
    **Theme color** changes the surface, digits, controls, and progress together;
    **Edges → Diffuse** removes the defined outline. Changes preview immediately.
    Type directly into the focus and break duration fields. **Start buttons** controls
    the three shortcuts; press Return or leave the field to save. Focus durations accept
    1–180 minutes. Changes apply to future sessions and preserve the active countdown.
-4. Under **Markdown journal**, enter a path and click **Save path**, or choose a file.
+4. Under **Journal & Mac → Markdown journal**, enter a path and click **Save path**, or choose a file.
    Use **Open Markdown** to see the actual record in your editor.
-5. At the top of Preferences, **Bedtime reminder** lets you set the daily notification time,
+5. Under **Bedtime & alerts**, **Bedtime reminder** lets you set the daily notification time,
    the end of the reminder window, and the reminder text.
    Times use your Mac's local clock; windows can cross midnight. The reminder remains
    visible while Still is running and the Mac is awake. **5 分钟后再提醒** delays it
    for 5 minutes. Turning off **Remind me at bedtime** disables the schedule.
 
 6. Under **Focus reminders**, add apps with **Choose app…** or enter a website.
+   The website list is folded; click **Show … websites** to review or remove entries.
    Each site matches its exact hostname and its www address. Add work or mobile subdomains
    individually if desired. App reminders work immediately. For websites, choose
    **Allow access…** and enable Still under **Privacy & Security → Accessibility**.
@@ -124,7 +137,9 @@ your own identity. `STILL_BUILD_PATH` optionally places build artifacts elsewher
 After quitting Still, you can also set the path from a terminal:
 `/Applications/Still.app/Contents/MacOS/Still --journal /path/to/focus-sessions.md`.
 
-The menu-bar leaf can show or hide the timer, open history, or quit. Hidden timers
+The menu-bar leaf groups its commands under three headings: the timer's current state
+(start, pause or reset, and show or hide the timer), **Today** (Daily Overview and the
+Markdown journal) and **Mac** (keep awake), followed by Preferences and Quit. Hidden timers
 keep running. Quitting leaves an already-scheduled notification intact; a completed
 session is reconciled on the next launch. The live focus chime follows Still’s sound
 switch and the Mac’s output volume. Notifications delivered by macOS follow its Focus
@@ -155,7 +170,7 @@ On a Mac with a Desktop **MySpace** folder, the default journal is
 MySpace works as well. Macs without MySpace default to `~/Documents/Still-sessions.md`.
 When upgrading from the old Documents default, Still imports its records into MySpace.
 A custom journal path is kept. To move the records explicitly, choose **Preferences →
-Markdown journal → Use Desktop MySpace**.
+Journal & Mac → Markdown journal → Use Desktop MySpace**.
 
 Each entry has a readable timestamp and a hidden identifier. A second Mac can rebuild
 the overview from the shared Markdown alone. Opening the overview refreshes it from disk.
@@ -167,8 +182,14 @@ folder never pauses the timer or blocks the window. The app shows write errors a
 history into the selected file. Keep hidden Still metadata comments if you edit the
 journal, so the app can recognize entries and avoid duplicating them.
 
+Research-mode settings and the running study live in
+`~/Library/Application Support/Still/research-study.json`. Check-in answers are journal
+notes (`<!-- still-note:… -->`): releases before notes ignore them, and an unreadable note
+is skipped rather than blocking your sessions.
+
 Edited distraction lists are saved in `~/Library/Application Support/Still/focus-reminders.json`.
 The reminder compares the current app or website on-device. It does not save a usage log.
+Research mode records what is on screen only at the moment of each check-in.
 
 Window position lives in macOS app preferences. No data leaves your Mac through Still.
 Any cloud synchronization is controlled by the folder you choose.
@@ -178,7 +199,7 @@ Any cloud synchronization is controlled by the folder you choose.
 The expanded panel has room for a short thought. Use the arrow to advance; there is
 no automatic carousel. The collapsed timer stays the same size.
 
-Choose **Preferences → Inspiration → Edit phrases…** to open
+Choose **Preferences → Journal & Mac → Inspiration → Edit phrases…** to open
 `~/Library/Application Support/Still/inspiration.json` in TextEdit. Save your edits,
 then reopen the timer controls to reload. An example collection is created on first edit:
 
@@ -204,6 +225,7 @@ collection and its sources belong outside the source checkout.
 ./scripts/test.sh                              # timer core, including CLT-only Macs
 ./scripts/test-journal.sh                      # Markdown preservation and round-trip checks
 ./scripts/test-inspiration.sh                  # local phrase format and validation
+./scripts/test-research.sh                     # research-mode schedule
 swift test                                    # XCTest, with full Xcode
 ./scripts/build.sh
 /Applications/Still.app/Contents/MacOS/Still --self-test  # isolated persistence checks
@@ -223,6 +245,10 @@ ready, running, paused, and completed panels, plus settings closure and appearan
 changes. It uses an isolated preview model and temporary data path. Its generous
 50% CPU threshold detects sustained layout loops, not frame-rate performance;
 check actual dragging and click-to-expand on a logged-in Mac as well.
+
+`/Applications/Still.app/Contents/MacOS/Still --preferences-snapshot <folder>` writes the
+Preferences window, page by page, as light and dark PNGs for layout review. It uses
+preview data and never reads or changes your settings.
 
 Run `swift scripts/generate-assets.swift --alert-sounds` to regenerate the four instrument sounds.
 Run it without arguments to regenerate all assets.

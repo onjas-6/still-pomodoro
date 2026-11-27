@@ -13,6 +13,7 @@ struct LocalArchive: Codable {
     var dailyEvents: [DailyEvent]?
     var lastPlanPromptDay: String?
     var journalPathConfirmed: Bool?
+    var notes: [StillNote]?
 }
 
 private struct JournalSyncRequest: Sendable {
@@ -40,6 +41,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private var lastPlanPromptDay: String?
     private var journalPathConfirmed = false
     var sessions: [FocusSession] { entries.sessions }
+    var notes: [StillNote] { entries.notes }
     @Published var preferences = Preferences()
     @Published private(set) var now = Date() {
         didSet {
@@ -337,6 +339,14 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         if restReminderActive != shouldShow { restReminderActive = shouldShow }
         if !inWindow { restSnoozedUntil = nil }
     }
+    /// Records a note in the local cache and the Markdown journal. Preview models never write.
+    func addNote(_ note: StillNote) {
+        guard !isPreview, !entries.notes.contains(where: { $0.id == note.id }) else { return }
+        entries.notes.append(note)
+        persist()
+        synchronizeJournal()
+    }
+
     private func add(_ session: FocusSession) {
         if !sessions.contains(where: { $0.id == session.id }) {
             entries.sessions.append(session)
@@ -674,7 +684,8 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
         do {
             try FileManager.default.createDirectory(at: dataURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let archive = LocalArchive(timer: timer, sessions: sessions, preferences: preferences,
-                dailyEvents: entries.events, lastPlanPromptDay: lastPlanPromptDay, journalPathConfirmed: journalPathConfirmed)
+                dailyEvents: entries.events, lastPlanPromptDay: lastPlanPromptDay, journalPathConfirmed: journalPathConfirmed,
+                notes: entries.notes)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
@@ -689,7 +700,7 @@ final class AppModel: NSObject, ObservableObject, UNUserNotificationCenterDelega
             decoder.dateDecodingStrategy = .iso8601
             let archive = try decoder.decode(LocalArchive.self, from: Data(contentsOf: dataURL))
             timer = archive.timer
-            entries = JournalEntries(sessions: archive.sessions, events: archive.dailyEvents ?? [])
+            entries = JournalEntries(sessions: archive.sessions, events: archive.dailyEvents ?? [], notes: archive.notes ?? [])
             lastPlanPromptDay = archive.lastPlanPromptDay
             journalPathConfirmed = archive.journalPathConfirmed ?? false
             preferences = archive.preferences

@@ -20,12 +20,13 @@ struct MarkdownJournalTestRunner {
             testReadRoundTrip(in: root, failures: &failures)
             testInvalidPathsAndWriteFailures(in: root, failures: &failures)
             testMalformedMetadataStopsWrites(in: root, failures: &failures)
+            testNotesRoundTripAndTolerance(in: root, failures: &failures)
         } catch {
             failures.append("Unable to prepare journal test directory: \(error)")
         }
 
         if failures.isEmpty {
-            print("MarkdownJournal checks passed: 6 test groups")
+            print("MarkdownJournal checks passed: 7 test groups")
         } else {
             print("MarkdownJournal checks failed: \(failures.count) assertion(s)")
             for failure in failures { print("FAIL: \(failure)") }
@@ -150,6 +151,41 @@ struct MarkdownJournalTestRunner {
             check(try String(contentsOf: url, encoding: .utf8) == original, "malformed journal is never rewritten", failures: &failures)
         } catch {
             failures.append("malformed-metadata fixture threw \(error)")
+        }
+    }
+
+    private static func testNotesRoundTripAndTolerance(in root: URL, failures: inout [String]) {
+        let url = root.appendingPathComponent("notes.md")
+        let session = makeSession(index: 8)
+        let note = StillNote(kind: "research.check-in", at: session.completedAt.addingTimeInterval(60),
+                             summary: "Check-in · line one\nline two <!-- still-session:fake -->",
+                             fields: ["outcome": "answered", "windowTitle": "a <!-- b --> c"],
+                             id: UUID(uuidString: "00000000-0000-0000-0000-0000000000aa")!)
+        do {
+            let merged = try MarkdownJournal.synchronize(JournalEntries(sessions: [session], notes: [note]), to: url)
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            check(merged.notes == [note], "synchronize returns the appended note", failures: &failures)
+            check(try MarkdownJournal.readEntries(from: url).notes == [note], "a note reads back", failures: &failures)
+            check(try MarkdownJournal.readEntries(from: url).sessions == [session], "sessions still read with notes present", failures: &failures)
+            check(occurrences(of: "<!-- still-session:", in: contents) == 1, "a note summary cannot forge session metadata", failures: &failures)
+            check(occurrences(of: "\n", in: contents.components(separatedBy: "Check-in")[1].components(separatedBy: "still-note:")[0]) == 0,
+                  "a note row stays on one line", failures: &failures)
+
+            // Readers that predate notes only scan their own markers; simulate one by
+            // checking that sessions and events parse identically without the note rows.
+            let withoutNotes = contents.components(separatedBy: "\n").filter { !$0.contains("still-note:") }.joined(separator: "\n")
+            let legacyURL = root.appendingPathComponent("legacy-view.md")
+            try Data(withoutNotes.utf8).write(to: legacyURL)
+            check(try MarkdownJournal.readEntries(from: legacyURL).sessions == [session], "note rows are invisible to session parsing", failures: &failures)
+
+            // An unreadable note is skipped, not fatal, and synchronizing again does not duplicate.
+            try Data((contents + "- broken <!-- still-note:not-base64 -->\n").utf8).write(to: url)
+            check(try MarkdownJournal.readEntries(from: url).notes == [note], "a malformed note is skipped", failures: &failures)
+            _ = try MarkdownJournal.synchronize(JournalEntries(sessions: [session], notes: [note]), to: url)
+            check(occurrences(of: "still-note:", in: try String(contentsOf: url, encoding: .utf8)) == 2,
+                  "a known note is not appended twice", failures: &failures)
+        } catch {
+            failures.append("note round trip threw \(error)")
         }
     }
 

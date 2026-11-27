@@ -8,6 +8,7 @@ jobs:
       - run: ./scripts/test.sh
       - run: ./scripts/test-journal.sh
       - run: ./scripts/test-inspiration.sh
+      - run: ./scripts/test-research.sh
       - run: swift test
       - run: ./scripts/build.sh
         env:

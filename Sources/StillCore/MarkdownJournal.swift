@@ -39,6 +39,8 @@ public enum MarkdownJournal {
     private static let header = "# Focus sessions\n\nDeep work goals and sessions, recorded locally by Still.\n"
     private static let markerPrefix = "<!-- still-session:"
     private static let eventPrefix = "<!-- still-day:"
+    /// Notes use their own marker so releases that predate them never try to decode one.
+    private static let notePrefix = "<!-- still-note:"
     private static let markerSuffix = "-->"
 
     public static func read(from url: URL) throws -> [FocusSession] {
@@ -68,7 +70,8 @@ public enum MarkdownJournal {
 
             let sessionRows = try missing.sessions.map { ($0.completedAt, try row(for: $0)) }
             let eventRows = try missing.events.map { ($0.date, try row(for: $0)) }
-            let rows = (sessionRows + eventRows).sorted { $0.0 < $1.0 }.map(\.1).joined(separator: "\n") + "\n"
+            let noteRows = try missing.notes.map { ($0.date, try row(for: $0)) }
+            let rows = (sessionRows + eventRows + noteRows).sorted { $0.0 < $1.0 }.map(\.1).joined(separator: "\n") + "\n"
             let separator: String
             if created || contents == header {
                 separator = "\n"
@@ -202,7 +205,24 @@ public enum MarkdownJournal {
                 throw MarkdownJournalError.malformedMetadata
             }
         }
-        return try JournalEntries(sessions: records(in: contents, prefix: markerPrefix), events: events)
+        return try JournalEntries(sessions: records(in: contents, prefix: markerPrefix), events: events,
+                                  notes: tolerantRecords(in: contents, prefix: notePrefix))
+    }
+
+    /// Notes are additive context, so one unreadable note must not block sessions or goals.
+    private static func tolerantRecords<Record: Decodable>(in contents: String, prefix: String) -> [Record] {
+        var result: [Record] = []
+        var searchRange = contents.startIndex..<contents.endIndex
+        while let markerRange = contents.range(of: prefix, options: [], range: searchRange),
+              let endingRange = contents.range(of: markerSuffix, options: [], range: markerRange.upperBound..<contents.endIndex) {
+            let encoded = contents[markerRange.upperBound..<endingRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let data = Data(base64Encoded: encoded), let record = try? JSONDecoder().decode(Record.self, from: data) {
+                result.append(record)
+            }
+            searchRange = endingRange.upperBound..<contents.endIndex
+        }
+        return result
     }
 
     private static func records<Record: Decodable>(in contents: String, prefix: String) throws -> [Record] {
@@ -243,6 +263,15 @@ public enum MarkdownJournal {
         }
         let metadata = try JSONEncoder().encode(event).base64EncodedString()
         return "- **\(time)** · \(detail) \(eventPrefix)\(metadata) -->"
+    }
+
+    private static func row(for note: StillNote) throws -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = note.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm zzz"
+        let metadata = try JSONEncoder().encode(note).base64EncodedString()
+        return "- **\(formatter.string(from: note.date))** · \(note.markdownSummary) \(notePrefix)\(metadata) -->"
     }
 
     private static func row(for session: FocusSession) throws -> String {

@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var model: AppModel!
     private var focusTargets: FocusTargetStore!
     private var focusMonitor: FocusReminderMonitor?
+    private var research: ResearchSampler!
     private let shortcutOnOpenRunner = ShortcutOnOpenRunner()
     private var shortcutLifecycle: FocusShortcutLifecycle!
     private let panelState = PanelState()
@@ -73,12 +74,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func applicationDidFinishLaunching(_ notification: Notification) {
         windowSelfTest = CommandLine.arguments.contains("--window-self-test")
         let renderSelfTest = CommandLine.arguments.contains("--render-self-test")
-        preview = windowSelfTest || renderSelfTest || CommandLine.arguments.contains("--preview")
+        let snapshotDirectory = CommandLine.arguments.firstIndex(of: "--preferences-snapshot")
+            .flatMap { CommandLine.arguments.count > $0 + 1 ? URL(fileURLWithPath: CommandLine.arguments[$0 + 1]) : nil }
+        preview = windowSelfTest || renderSelfTest || snapshotDirectory != nil || CommandLine.arguments.contains("--preview")
         let diagnosticDirectory = renderSelfTest
             ? FileManager.default.temporaryDirectory.appendingPathComponent("Still-RenderSelfTest-\(UUID().uuidString)") : nil
         model = AppModel(dataDirectory: diagnosticDirectory, preview: preview)
         let rulesDirectory = preview ? FileManager.default.temporaryDirectory.appendingPathComponent("Still-Preview-\(UUID())") : model.dataURL.deletingLastPathComponent()
         focusTargets = FocusTargetStore(directory: rulesDirectory)
+        research = ResearchSampler(model: model, store: ResearchStore(directory: rulesDirectory, preview: preview))
         shortcutLifecycle = FocusShortcutLifecycle(
             runOpen: { [weak self] deadline in
                 self?.shortcutOnOpenRunner.runIfConfigured(preferenceKey: ShortcutOnOpenRunner.openPreferenceKey, deadline: deadline) ?? false
@@ -127,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 self?.handleFocusTimerChange(timer)
             }
         }
-        if !windowSelfTest && !renderSelfTest {
+        if !windowSelfTest && !renderSelfTest && snapshotDirectory == nil {
             setupMenuBar(); setupDismissal()
             let dayChanges = model.$now.map { Calendar.current.startOfDay(for: $0) }.removeDuplicates()
             dailyStatusObservation = Publishers.CombineLatest(model.$days, dayChanges)
@@ -146,6 +150,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if !preview {
             shortcutLifecycle.opened(with: model.timer)
             offerDailyGoal()
+        }
+        if let snapshotDirectory {
+            Task { @MainActor in
+                exit(await PreferencesSnapshot.run(model: self.model, directory: snapshotDirectory,
+                    showSettings: { self.showSettings() }, window: { self.settingsWindow }, research: self.research))
+            }
         }
         if renderSelfTest {
             Task { @MainActor in
@@ -451,21 +461,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     func menuWillOpen(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(NSMenuItem(title: "Still · \(model.minutes):\(model.seconds)", action: nil, keyEquivalent: ""))
-        menu.addItem(.separator())
-        addItem("Show timer", action: #selector(showTimer), key: "")
-        addItem("Timer controls", action: #selector(showControls), key: "")
+        // Timer: what is running now and what you can do about it.
+        menu.addItem(NSMenuItem.sectionHeader(title: timerStatusTitle))
         addItem(model.primaryTitle, action: #selector(toggleTimer), key: "")
-        addItem("Reset timer", action: #selector(resetTimer), key: "")
+        if model.isInProgress { addItem("Reset timer", action: #selector(resetTimer), key: "") }
+        if panel.isVisible {
+            addItem("Open timer controls", action: #selector(showControls), key: "")
+            addItem("Hide timer", action: #selector(hideTimer), key: "")
+        } else {
+            addItem("Show timer", action: #selector(showTimer), key: "")
+        }
         menu.addItem(.separator())
+        // Today: the plan and its record.
+        menu.addItem(NSMenuItem.sectionHeader(title: todayTitle))
+        addItem("Daily Overview", action: #selector(showHistory), key: "h")
+        addItem("Open Markdown journal", action: #selector(openJournal), key: "")
+        if let status = research.status() {
+            let item = NSMenuItem(title: status, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem.sectionHeader(title: "Mac"))
         menu.addItem(stayAwakeMenuItem())
         menu.addItem(.separator())
-        addItem("Daily Overview · " + model.today.progressText, action: #selector(showHistory), key: "h")
-        addItem("Open Markdown journal", action: #selector(openJournal), key: "")
         addItem("Preferences…", action: #selector(showSettings), key: ",")
-        menu.addItem(.separator())
-        addItem("Hide timer", action: #selector(hideTimer), key: "")
         addItem("Quit Still", action: #selector(quit), key: "q")
+    }
+    private var timerStatusTitle: String {
+        let time = "\(model.minutes):\(model.seconds)"
+        let mode = model.timer.mode == .focus ? "Focus" : "Break"
+        switch model.timer.phase {
+        case .running: return "\(mode) · \(time) left"
+        case .paused: return "\(mode) paused · \(time) left"
+        case .completed: return model.timer.mode == .focus ? "Focus complete" : "Break over"
+        case .ready: return "Ready · \(time)"
+        }
+    }
+    private var todayTitle: String {
+        let today = model.today
+        switch today.goal {
+        case nil: return "Today · \(today.completed) done"
+        case 0: return "Today · rest day"
+        case let goal?: return "Today · \(today.completed) of \(goal) sessions"
+        }
     }
     private func stayAwakeMenuItem() -> NSMenuItem {
         let stayAwake = model.stayAwake
@@ -562,7 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     @objc private func showSettings() {
         setExpanded(false)
-        if settingsWindow == nil { settingsWindow = detailWindow(title: "Still — Preferences", view: PreferencesView(model: model, focusTargets: focusTargets, shortcutOnOpenRunner: shortcutOnOpenRunner)) }
+        if settingsWindow == nil { settingsWindow = detailWindow(title: "Still — Preferences", view: PreferencesView(model: model, focusTargets: focusTargets, shortcutOnOpenRunner: shortcutOnOpenRunner, research: research)) }
         settingsWindow?.center(); settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

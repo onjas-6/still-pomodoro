@@ -3,11 +3,75 @@ import SwiftUI
 import StillCore
 import UniformTypeIdentifiers
 
+/// Preferences are grouped by what they change, in the order most people adjust them.
+enum PreferenceGroup: String, CaseIterable, Identifiable {
+    case focus, reminders, research, bedtime, appearance, journal
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .focus: return "Focus"
+        case .reminders: return "Focus reminders"
+        case .research: return "Research mode"
+        case .bedtime: return "Bedtime & alerts"
+        case .appearance: return "Appearance"
+        case .journal: return "Journal & Mac"
+        }
+    }
+
+    /// A short label for the section links at the top of the window.
+    var shortTitle: String {
+        switch self {
+        case .focus: return "Focus"
+        case .reminders: return "Reminders"
+        case .research: return "Research"
+        case .bedtime: return "Bedtime"
+        case .appearance: return "Look"
+        case .journal: return "Journal"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .focus: return "How long you focus and rest."
+        case .reminders: return "Nudges while a focus timer runs."
+        case .research: return "Random check-ins that measure when and why you drift."
+        case .bedtime: return "Your nightly stop-work reminder, sounds and notifications."
+        case .appearance: return "How the floating timer looks."
+        case .journal: return "Your Markdown record, personal phrases and keep-awake."
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .focus: return "timer"
+        case .reminders: return "bell"
+        case .research: return "questionmark.bubble"
+        case .bedtime: return "moon"
+        case .appearance: return "paintpalette"
+        case .journal: return "book.closed"
+        }
+    }
+}
+
+/// A subsection title inside a preference group.
+struct PreferenceSubheading: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Text(title).font(.system(size: 12, weight: .semibold)).accessibilityAddTraits(.isHeader)
+    }
+}
+
 struct PreferencesView: View {
     @ObservedObject var model: AppModel
     let focusTargets: FocusTargetStore
     @ObservedObject var shortcutOnOpenRunner: ShortcutOnOpenRunner
+    let research: ResearchSampler
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StoredViewState private var journalPathDraft = ""
     @StoredViewState private var restMessageDraft = ""
     private var palette: Palette { .resolved(theme: model.preferences.theme, scheme: colorScheme, colorTheme: model.preferences.colorTheme) }
@@ -39,113 +103,223 @@ struct PreferencesView: View {
     }
 
     private var settingsContent: some View {
-        ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Your rhythm.").font(.system(size: 27, design: .serif))
-                Text("A few small things to make Still yours.").font(.system(size: 12)).foregroundStyle(palette.secondary)
-            }
-
-            bedtimeSettings
-
-            section("FOCUS") {
-                durationRow("Default focus", value: $model.preferences.focusMinutes, range: 1...180)
-                HStack(spacing: 10) {
-                    Text("Start buttons").font(.system(size: 12))
-                    Spacer()
-                    ForEach(0..<3, id: \.self) { index in
-                        HStack(spacing: 4) {
-                            DurationField(title: "Focus preset \(index + 1)", value: presetBinding(index), range: 1...180)
-                                .frame(width: 43, height: 22)
-                            Text("min").font(.system(size: 10)).foregroundStyle(palette.secondary)
-                        }
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 0) {
+                header(proxy)
+                Rectangle().fill(palette.ink.opacity(0.08)).frame(height: 1)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        focusGroup
+                        remindersGroup
+                        researchGroup
+                        bedtimeGroup
+                        appearanceGroup
+                        journalGroup
+                        footer
                     }
+                    .toggleStyle(.switch).controlSize(.small).tint(palette.ink)
+                    .padding(.horizontal, 20).padding(.vertical, 16).frame(width: 440)
                 }
-                Text("Type a number, then press Return. Applies to your next session.")
-                    .font(.system(size: 10)).foregroundStyle(palette.secondary)
-                FocusShortcutPreferences(runner: shortcutOnOpenRunner, palette: palette)
             }
+        }
+    }
 
-            alertSettings
-
-            section("FOCUS REMINDERS") {
-                FocusTargetPreferences(store: focusTargets)
+    /// The title and section links stay visible while the groups scroll.
+    private func header(_ proxy: ScrollViewProxy) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Preferences").font(.system(size: 26, design: .serif))
+            HStack(spacing: 4) {
+                ForEach(PreferenceGroup.allCases) { group in
+                    Button { jump(to: group, proxy) } label: {
+                        Text(group.shortTitle).font(.system(size: 11, weight: .medium)).fixedSize()
+                            .padding(.horizontal, 8).frame(height: 24)
+                            .background(palette.ink.opacity(0.06), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Go to " + group.title)
+                }
             }
+        }
+        .padding(.horizontal, 24).padding(.top, 22).padding(.bottom, 14)
+    }
 
-            section("BREAKS") {
+    private func jump(to group: PreferenceGroup, _ proxy: ScrollViewProxy) {
+        if reduceMotion {
+            proxy.scrollTo(group, anchor: .top)
+        } else {
+            withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(group, anchor: .top) }
+        }
+    }
+
+    private var focusGroup: some View {
+        group(.focus) {
+            subsection("Session length") {
+                durationRow("Default focus", value: $model.preferences.focusMinutes, range: 1...180)
+                presetRow
+                note("Type a number, then press Return. Applies to your next session.")
+            }
+            separator
+            subsection("Breaks") {
                 durationRow("Short rest", value: $model.preferences.shortBreakMinutes, range: 1...60)
                 durationRow("Long rest", value: $model.preferences.longBreakMinutes, range: 1...90)
             }
+        }
+    }
 
-            section("APPEARANCE") {
-                Picker("Theme", selection: $model.preferences.theme) {
-                    Text("System").tag("system")
-                    Text("Light").tag("light")
-                    Text("Dark").tag("dark")
+    private var presetRow: some View {
+        HStack(spacing: 10) {
+            Text("Start buttons").font(.system(size: 12))
+            Spacer()
+            ForEach(0..<3, id: \.self) { index in
+                HStack(spacing: 4) {
+                    DurationField(title: "Focus preset \(index + 1)", value: presetBinding(index), range: 1...180)
+                        .frame(width: 43, height: 22)
+                    Text("min").font(.system(size: 10)).foregroundStyle(palette.secondary)
                 }
-                .pickerStyle(.segmented)
-
-                AppearanceOptions(model: model, palette: palette)
-
-                sliderRow("Collapsed timer size", value: $model.preferences.compactScale, range: Preferences.compactScaleRange, display: "\(Int((model.preferences.compactScale * 100).rounded()))%")
-                sliderRow("Background opacity", value: $model.preferences.backgroundOpacity, range: 0.15...0.9, display: "\(Int(model.preferences.backgroundOpacity * 100))%")
-                Toggle("Float above other windows", isOn: $model.preferences.floatOnTop)
             }
+        }
+    }
 
-            section("KEEP MAC AWAKE · NO SLEEP") {
+    private var remindersGroup: some View {
+        group(.reminders) {
+            FocusTargetPreferences(store: focusTargets, palette: palette)
+            separator
+            subsection("macOS Focus mode") {
+                FocusShortcutPreferences(runner: shortcutOnOpenRunner, palette: palette)
+            }
+        }
+    }
+
+    private var researchGroup: some View {
+        group(.research) {
+            ResearchPreferences(model: model, store: research.store, sampler: research, palette: palette)
+        }
+    }
+
+    private var bedtimeGroup: some View {
+        group(.bedtime) {
+            bedtimeSettings
+            separator
+            soundSettings
+            separator
+            notificationSettings
+        }
+    }
+
+    private var appearanceGroup: some View {
+        group(.appearance) {
+            Picker("Mode", selection: $model.preferences.theme) {
+                Text("System").tag("system")
+                Text("Light").tag("light")
+                Text("Dark").tag("dark")
+            }
+            .pickerStyle(.segmented)
+            AppearanceOptions(model: model, palette: palette)
+            separator
+            sliderRow("Collapsed timer size", value: $model.preferences.compactScale, range: Preferences.compactScaleRange, display: "\(Int((model.preferences.compactScale * 100).rounded()))%")
+            sliderRow("Background opacity", value: $model.preferences.backgroundOpacity, range: 0.15...0.9, display: "\(Int(model.preferences.backgroundOpacity * 100))%")
+            Toggle("Float above other windows", isOn: $model.preferences.floatOnTop)
+        }
+    }
+
+    private var journalGroup: some View {
+        group(.journal) {
+            journalSettings
+            separator
+            subsection("Inspiration") {
+                InspirationPreferences(store: model.inspiration, palette: palette)
+            }
+            separator
+            subsection("Keep Mac awake (no sleep)") {
                 StayAwakePreferences(model: model, stayAwake: model.stayAwake, palette: palette)
             }
+        }
+    }
 
-            section("MARKDOWN JOURNAL") {
+    private var journalSettings: some View {
+        subsection("Markdown journal") {
+            HStack(spacing: 8) {
                 TextField("Journal path", text: $journalPathDraft)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
-                HStack(spacing: 9) {
-                    Button("Save path", action: saveJournalPath)
-                    Button("Choose…", action: chooseJournal)
-                    Button("Use existing…", action: chooseExistingJournal)
-                    Button("Open Markdown") { model.openJournal() }
-                    Spacer()
-                }
-                .controlSize(.small)
-                if !model.journalDisplayPath.isEmpty {
-                    Text(model.journalDisplayPath).font(.system(size: 10)).foregroundStyle(palette.secondary).lineLimit(1).truncationMode(.middle)
-                }
-                if model.preferences.journalPath != JournalLocation.mySpaceJournal.path {
-                    Button("Use Desktop MySpace") {
-                        journalPathDraft = JournalLocation.mySpaceJournal.path
-                        saveJournalPath()
-                    }.controlSize(.small)
-                }
-                if model.journalIsBusy {
-                    Text("Updating Markdown…").font(.system(size: 10)).foregroundStyle(palette.secondary)
-                }
-                if let error = model.journalError {
-                    Text(error).font(.system(size: 10)).foregroundStyle(.orange)
-                }
+                    .onSubmit(saveJournalPath)
+                Button("Save path", action: saveJournalPath).controlSize(.small)
             }
-
-            section("INSPIRATION") {
-                InspirationPreferences(store: model.inspiration, palette: palette)
+            HStack(spacing: 9) {
+                Button("Choose…", action: chooseJournal)
+                Button("Use existing…", action: chooseExistingJournal)
+                Button("Open Markdown") { model.openJournal() }
+                Spacer()
             }
+            .controlSize(.small)
+            if !model.journalDisplayPath.isEmpty {
+                note(model.journalDisplayPath).lineLimit(1).truncationMode(.middle)
+            }
+            if model.preferences.journalPath != JournalLocation.mySpaceJournal.path {
+                Button("Use Desktop MySpace") {
+                    journalPathDraft = JournalLocation.mySpaceJournal.path
+                    saveJournalPath()
+                }.controlSize(.small)
+            }
+            if model.journalIsBusy { note("Updating Markdown…") }
+            if let error = model.journalError {
+                Text(error).font(.system(size: 10)).foregroundStyle(.orange)
+            }
+        }
+    }
 
-            Divider().overlay(palette.ink.opacity(0.07))
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Image(systemName: "lock.shield").font(.system(size: 13))
                 Text("Only on this Mac. No accounts. No tracking.").font(.system(size: 11))
-            }.foregroundStyle(palette.secondary)
+            }
+            .foregroundStyle(palette.secondary)
             if let error = model.storageError { Text(error).font(.caption).foregroundStyle(.orange) }
         }
-        .toggleStyle(.switch).controlSize(.small).tint(palette.ink)
-        .padding(28).frame(width: 440)
+        .padding(.horizontal, 4).padding(.top, 2)
+    }
+
+    /// One titled card per topic: a clear heading, a one-line purpose, then its settings.
+    private func group<Content: View>(_ group: PreferenceGroup, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Image(systemName: group.symbol).font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(palette.progress).frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.title).font(.system(size: 18, weight: .semibold, design: .serif))
+                    Text(group.subtitle).font(.system(size: 11)).foregroundStyle(palette.secondary)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            content()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.ink.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .id(group)
+    }
+
+    private func subsection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            PreferenceSubheading(title)
+            content()
         }
     }
 
-    private func label(_ text: String) -> some View {
-        Text(text).font(.system(size: 9, weight: .semibold)).tracking(2).foregroundStyle(palette.secondary)
+    private var separator: some View {
+        Rectangle().fill(palette.ink.opacity(0.07)).frame(height: 1)
     }
+
+    private func note(_ text: String) -> some View {
+        Text(text).font(.system(size: 10)).foregroundStyle(palette.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var bedtimeSettings: some View {
-        section("BEDTIME REMINDER") {
+        subsection("Bedtime reminder") {
             Toggle("Remind me at bedtime", isOn: $model.preferences.restReminderEnabled)
             HStack(spacing: 18) {
                 DatePicker("Bedtime", selection: restTimeBinding(\.restStartMinute), displayedComponents: .hourAndMinute)
@@ -184,11 +358,18 @@ struct PreferencesView: View {
         }.buttonStyle(.link).font(.caption)
     }
 
-    private var alertSettings: some View {
-        section("ALERTS") {
-            Toggle("Timer and inactivity sounds", isOn: $model.preferences.soundEnabled)
+    private var soundSettings: some View {
+        subsection("Sounds") {
+            Toggle("Play timer and inactivity sounds", isOn: $model.preferences.soundEnabled)
             soundRow("Timer sound", selection: $model.preferences.timerTone, choices: AlertTone.timerChoices)
             soundRow("Inactivity sound", selection: $model.preferences.inactivityTone, choices: AlertTone.allCases)
+        }
+        .onChange(of: model.preferences.timerTone) { _, _ in model.savePreferences() }
+        .onChange(of: model.preferences.inactivityTone) { _, _ in model.savePreferences() }
+    }
+
+    private var notificationSettings: some View {
+        subsection("Notifications") {
             Toggle("Notify when a timer ends", isOn: $model.preferences.notificationsEnabled)
             HStack(spacing: 8) {
                 Text(model.notificationStatus).font(.system(size: 10)).foregroundStyle(palette.secondary)
@@ -196,8 +377,6 @@ struct PreferencesView: View {
                 notificationSettingsButton
             }
         }
-        .onChange(of: model.preferences.timerTone) { _, _ in model.savePreferences() }
-        .onChange(of: model.preferences.inactivityTone) { _, _ in model.savePreferences() }
     }
 
     private func soundRow(_ title: String, selection: Binding<AlertTone>, choices: [AlertTone]) -> some View {
@@ -212,12 +391,6 @@ struct PreferencesView: View {
                 .buttonStyle(.link)
                 .font(.system(size: 11))
                 .accessibilityLabel("Preview \(title.lowercased())")
-        }
-    }
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            label(title)
-            content()
         }
     }
     private func durationRow(_ title: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
@@ -347,8 +520,8 @@ private struct StayAwakePreferences: View {
                 .font(.system(size: 10)).foregroundStyle(palette.secondary)
         }
         .controlSize(.small)
-        Text("Like caffeinate: downloads, builds, and other work keep running instead of the Mac going to sleep. Lid-closed mode asks for your password once per session, then restores normal sleep when time is up, Still quits, or the battery drops below 10%. Keep the Mac ventilated.")
-            .font(.system(size: 10)).foregroundStyle(palette.secondary)
+        Text("Like caffeinate: downloads and builds keep running. Lid-closed mode asks for your password once, then restores normal sleep when time is up, Still quits, or the battery drops below 10%.")
+            .font(.system(size: 10)).foregroundStyle(palette.secondary).fixedSize(horizontal: false, vertical: true)
         if let error = stayAwake.lidError {
             Text(error).font(.system(size: 10)).foregroundStyle(.orange)
         }
