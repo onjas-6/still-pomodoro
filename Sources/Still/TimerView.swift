@@ -38,17 +38,20 @@ struct TimerView: View {
             // The time is a single persistent view; the surface opens around it.
             // Controls reveal only after there is room, so they never squeeze into the pill.
             let reveal = max(0, min(1, (expansion - 0.40) / 0.60))
+            // Explicit CGFloat types: older Swift toolchains cannot resolve a Double/CGFloat ternary.
+            let digitSize = CGFloat(showGoal ? 27 : 34) * CGFloat(scale)
+            let digitY: CGFloat = showGoal ? 17 * CGFloat(scale) : size.height / 2 - (hasProgress ? 3 : 0)
             ZStack(alignment: .topLeading) {
-                digits(size: blend((showGoal ? 27 : 34) * scale, 36))
+                digits(size: blend(digitSize, 36))
                     .opacity(model.timer.phase == .paused ? 0.65 : 1)
-                    .position(x: size.width / 2, y: blend(showGoal ? 17 * scale : size.height / 2 - (hasProgress ? 3 : 0), 35))
+                    .position(x: size.width / 2, y: blend(digitY, 35))
 
                 if showGoal {
                     Text(model.today.hoverText)
                         .font(.system(size: 10 * scale, weight: .medium)).monospacedDigit()
                         .foregroundStyle(palette.ink).lineLimit(1).minimumScaleFactor(0.8)
-                        .frame(width: size.width - 14 * scale)
-                        .position(x: size.width / 2, y: (hasProgress ? 35 : 37) * scale)
+                        .frame(width: size.width - 14 * CGFloat(scale))
+                        .position(x: size.width / 2, y: CGFloat(hasProgress ? 35 : 37) * CGFloat(scale))
                         .allowsHitTesting(false)
                 }
 
